@@ -39,6 +39,11 @@ class ActivityLog:
     async def async_save(self) -> None:
         await self._store.async_save(self._data)
 
+    async def async_clear_all(self) -> None:
+        """Clear all activity records."""
+        self._data = {"activities": []}
+        await self.async_save()
+
     async def async_add_activity(
         self, *, kind: str, description: str, payload: dict[str, Any]
     ) -> dict[str, Any]:

@@ -76,6 +76,17 @@ class ReceiptStorage:
     async def async_save(self) -> None:
         await self._store.async_save(self._data)
 
+    async def async_clear_all_data(self) -> None:
+        """Clear all stored Grocery Intel data."""
+        self._data = {
+            "receipts": {},
+            "line_items": {},
+            "products": {},
+            "observations": {},
+            "processed_files": {},
+        }
+        await self.async_save()
+
     async def async_add_receipt(
         self,
         *,

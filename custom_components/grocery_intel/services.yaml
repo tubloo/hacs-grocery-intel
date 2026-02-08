@@ -70,11 +70,11 @@ reprocess_receipts:
 
 scan_receipts_inbox:
   name: Scan receipts inbox
-  description: Scan the receipts inbox path for new files and archive them.
+  description: Scan the receipts inbox path for new files and archive them. Already-processed files are archived with a _duplicate suffix.
 
 run_ocr:
   name: Run OCR
-  description: Run OCR for pending receipts or a specific receipt.
+  description: Run OCR for pending receipts or a specific receipt. If extractor_mode=llm, this triggers LLM file parsing.
   fields:
     receipt_id:
       name: Receipt ID
@@ -82,3 +82,47 @@ run_ocr:
       required: false
       selector:
         text:
+    overwrite:
+      name: Overwrite
+      description: Overwrite existing values (total/date/store) if enabled.
+      required: false
+      selector:
+        boolean:
+
+reparse_receipts:
+  name: Re-parse receipts
+  description: Re-parse total/date/store from existing OCR text for recent receipts (no OCR call).
+  fields:
+    receipt_id:
+      name: Receipt ID
+      description: Re-parse a specific receipt if provided.
+      required: false
+      selector:
+        text:
+    limit:
+      name: Limit
+      description: Max number of receipts to re-parse when no receipt_id is provided.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+          step: 1
+    overwrite:
+      name: Overwrite
+      description: Overwrite existing values (total/date/store) if enabled.
+      required: false
+      selector:
+        boolean:
+
+clear_all_data:
+  name: Clear all data
+  description: Clear all Grocery Intel data (receipts, products, observations, processed file history, and activity log).
+  fields:
+    confirm:
+      name: Confirm
+      description: Must be enabled/true to proceed. This action is irreversible.
+      required: true
+      selector:
+        boolean:

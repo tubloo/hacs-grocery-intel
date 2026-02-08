@@ -1,0 +1,51 @@
+{
+  "title": "Grocery Intel",
+  "config": {
+    "flow_title": "Grocery Intel",
+    "abort": {
+      "already_configured": "Grocery Intel is already configured."
+    },
+    "step": {
+      "user": {
+        "title": "Grocery Intel",
+        "description": "Local-first receipt tracking and spend analytics."
+      }
+    },
+    "error": {
+      "ocr_endpoint_required": "OCR endpoint URL is required when extractor mode is set to Heuristic or Hybrid.",
+      "llm_provider_required": "LLM provider is required when extractor mode is set to LLM or Hybrid.",
+      "llm_model_required": "LLM model is required when extractor mode is set to LLM or Hybrid.",
+      "llm_base_url_required": "LLM base URL is required for Ollama and Azure OpenAI."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {
+          "currency_symbol": "Currency symbol",
+          "overpaid_pct_threshold": "Overpaid threshold (0–1)",
+          "baseline_window_n": "Baseline window (receipts)",
+          "top_increases_recent_days": "Recent window (days)",
+          "top_increases_prior_days": "Prior window (days)",
+          "best_store_window_days": "Best store window (days)",
+          "receipts_inbox_path": "Receipts inbox path",
+          "receipts_archive_path": "Receipts archive path",
+          "inbox_scan_interval_sec": "Inbox scan interval (30–600s)",
+          "on_success": "On success",
+          "ocr_endpoint_url": "OCR endpoint URL",
+          "ocr_language": "OCR language",
+          "ocr_api_token": "OCR API token (optional)",
+          "ocr_api_token_header": "OCR API token header",
+          "extractor_mode": "Extractor mode",
+          "llm_provider": "LLM provider",
+          "llm_model": "LLM model",
+          "llm_api_key": "LLM API key (optional)",
+          "llm_base_url": "LLM base URL (optional)",
+          "llm_extra_instructions": "LLM extra instructions (optional)",
+          "azure_api_version": "Azure API version"
+        }
+      }
+    }
+  }
+}

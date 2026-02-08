@@ -7,7 +7,7 @@ from datetime import timedelta
 from statistics import median
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -165,7 +165,6 @@ class GrocerySpendSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntit
     """Representation of spend sensors."""
 
     _attr_has_entity_name = True
-    _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
@@ -200,7 +199,6 @@ class GroceryAnalyticsSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorE
     """Analytics sensor with list attributes."""
 
     _attr_has_entity_name = True
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
