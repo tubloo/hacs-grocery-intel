@@ -7,9 +7,10 @@ from datetime import timedelta
 from statistics import median
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -105,38 +106,54 @@ async def async_setup_entry(
 
     currency = entry.options.get(CONF_CURRENCY_SYMBOL, DEFAULT_CURRENCY_SYMBOL)
 
-    entry_id = entry.entry_id
+    device_info = DeviceInfo(
+        identifiers={(DOMAIN, "grocery_intel")},
+        name=entry.title,
+        manufacturer="Community",
+        model="Grocery Intel",
+    )
+
     entities: list[SensorEntity] = [
         GrocerySpendSensor(
             coordinator,
-            f"{entry_id}_grocery_spend_week",
-            "Grocery Spend Week",
+            f"{DOMAIN}_spend_week",
+            "Spend week",
+            "spend_week",
+            device_info,
             currency,
             "week",
         ),
         GrocerySpendSensor(
             coordinator,
-            f"{entry_id}_grocery_spend_month",
-            "Grocery Spend Month",
+            f"{DOMAIN}_spend_month",
+            "Spend month",
+            "spend_month",
+            device_info,
             currency,
             "month",
         ),
         GroceryAnalyticsSensor(
             coordinator,
-            f"{entry_id}_grocery_top_price_increases",
-            "Grocery Top Price Increases",
+            f"{DOMAIN}_top_price_increases",
+            "Top price increases",
+            "top_price_increases",
+            device_info,
             "top_increases",
         ),
         GroceryAnalyticsSensor(
             coordinator,
-            f"{entry_id}_grocery_overpaid_items_week",
-            "Grocery Overpaid Items Week",
+            f"{DOMAIN}_overpaid_items",
+            "Overpaid items",
+            "overpaid_items",
+            device_info,
             "overpaid_items",
         ),
         GroceryAnalyticsSensor(
             coordinator,
-            f"{entry_id}_grocery_best_store_by_item",
-            "Grocery Best Store By Item",
+            f"{DOMAIN}_best_store_by_item",
+            "Best store by item",
+            "best_store_by_item",
+            device_info,
             "best_store_items",
         ),
     ]
@@ -148,18 +165,24 @@ class GrocerySpendSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntit
     """Representation of spend sensors."""
 
     _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
         coordinator: GrocerySpendCoordinator,
         unique_id: str,
         name: str,
+        suggested_object_id: str,
+        device_info: DeviceInfo,
         currency_symbol: str,
         key: str,
     ) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = unique_id
         self._attr_name = name
+        self._attr_suggested_object_id = suggested_object_id
+        self._attr_device_info = device_info
         self._key = key
         self._attr_native_unit_of_measurement = currency_symbol
 
@@ -177,11 +200,22 @@ class GroceryAnalyticsSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorE
     """Analytics sensor with list attributes."""
 
     _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator: GrocerySpendCoordinator, unique_id: str, name: str, key: str) -> None:
+    def __init__(
+        self,
+        coordinator: GrocerySpendCoordinator,
+        unique_id: str,
+        name: str,
+        suggested_object_id: str,
+        device_info: DeviceInfo,
+        key: str,
+    ) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = unique_id
         self._attr_name = name
+        self._attr_suggested_object_id = suggested_object_id
+        self._attr_device_info = device_info
         self._key = key
 
     @property

@@ -38,7 +38,7 @@ add_receipt:
 
 undo_activity:
   name: Undo activity
-  description: Undo a previous receipt-added activity.
+  description: Undo a previous activity (e.g., receipt add/import or OCR completion/failure).
   fields:
     activity_id:
       name: Activity ID

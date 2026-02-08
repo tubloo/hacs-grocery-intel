@@ -21,8 +21,11 @@ Local-first Home Assistant integration for tracking grocery receipts and spend t
 - Activity log with undo
 
 ## Entities
-- `sensor.grocery_spend_week`
-- `sensor.grocery_spend_month`
+- `sensor.grocery_intel_spend_week`
+- `sensor.grocery_intel_spend_month`
+- `sensor.grocery_intel_top_price_increases`
+- `sensor.grocery_intel_overpaid_items`
+- `sensor.grocery_intel_best_store_by_item`
 
 ## Services
 - `grocery_intel.add_receipt`

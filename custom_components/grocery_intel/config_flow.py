@@ -38,12 +38,15 @@ class GroceryIntelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Grocery Intel."""
 
     VERSION = 1
+    _UNIQUE_ID = "grocery_intel"
 
     @staticmethod
     def async_get_options_flow(config_entry):
         return GroceryIntelOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input=None):
+        await self.async_set_unique_id(self._UNIQUE_ID)
+        self._abort_if_unique_id_configured()
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
 
