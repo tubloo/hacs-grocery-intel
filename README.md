@@ -34,22 +34,39 @@ Local-first Home Assistant integration for tracking grocery receipts and spend t
 - Spend sensors (weekly/monthly) + basic price analytics
 - OCR and/or LLM-based field extraction (configurable)
 - Activity log with undo for supported actions
+- Daily auto-add to Home Assistant Shopping List (optional)
+- Inventory images (fridge/pantry/cupboard) inbox + vision analysis (optional)
+- Alcohol item normalization (Beer/Wine/Cider/Spirits)
 
 ## Entities
 - `sensor.grocery_intel_spend_week`
 - `sensor.grocery_intel_spend_month`
+- `sensor.grocery_intel_spend_7d`
+- `sensor.grocery_intel_spend_30d`
+- `sensor.grocery_intel_avg_basket_30d`
+- `sensor.grocery_intel_receipt_count_30d`
+- `sensor.grocery_intel_receipt_processing`
+- `sensor.grocery_intel_top_stores_30d`
+- `sensor.grocery_intel_recent_receipts`
+- `sensor.grocery_intel_recent_activities`
+- `sensor.grocery_intel_inventory_recently_seen`
 - `sensor.grocery_intel_top_price_increases`
 - `sensor.grocery_intel_overpaid_items`
 - `sensor.grocery_intel_best_store_by_item`
 
 ## Services
 - `grocery_intel.add_receipt`
+- `grocery_intel.update_receipt`
 - `grocery_intel.undo_activity`
 - `grocery_intel.scan_receipts_inbox`
 - `grocery_intel.run_ocr` (also used to run LLM parsing in `llm` mode)
 - `grocery_intel.reparse_receipts`
 - `grocery_intel.reprocess_receipts`
 - `grocery_intel.clear_all_data`
+- `grocery_intel.run_auto_shopping` (manual trigger for the daily job; supports `dry_run`)
+- `grocery_intel.scan_inventory_images_inbox`
+- `grocery_intel.run_inventory_vision`
+- `grocery_intel.reset_stuck_receipts`
 
 ## Configuration
 - Add the integration via the Home Assistant UI.
@@ -57,10 +74,45 @@ Local-first Home Assistant integration for tracking grocery receipts and spend t
 - Receipt extraction: use `Extractor mode` (default `heuristic`).
   - `heuristic`: requires an OCR endpoint URL; built-in parsing extracts total/date/store.
   - `llm`: parses receipts via an LLM.
-    - Images (`.jpg/.png`) are sent directly to Ollama **vision** models (e.g., `llava:7b`) when `llm_provider=ollama`.
-    - PDFs are parsed from their text layer (via `pypdf`); if the PDF has no text layer, the first page is rendered to an image (via `PyMuPDF`) and sent to Ollama vision.
-    - The integration asks the LLM for `total`, `store_name`, `purchased_at`, and `line_items` (when possible).
+    - Images (`.jpg/.png/.webp/.heic/.heif`) are sent to a vision-capable LLM when `llm_provider=ollama` or `llm_provider=openai`.
+    - PDFs are parsed from their text layer (via `pypdf`). If the PDF has no text layer, you'll need to OCR/convert it outside Home Assistant (the integration avoids heavy native dependencies).
+    - The integration asks the LLM for `total`, `store_name`, `purchased_at`, and `line_items` (best-effort). For images/PDF-vision it will do a second “line items only” pass to improve extraction.
   - `hybrid`: uses OCR + heuristics first, then LLM to fill missing fields (and attempt line item extraction).
 - Optional: `LLM extra instructions` lets you add fine-tuning instructions; the integration always enforces a JSON-only contract and appends your instructions.
 - Tip (Home Assistant in Docker): `.local` hostnames may not resolve; prefer an IP like `http://192.168.x.x:11434` for `LLM base URL`.
-- Defaults (Options): inbox `/config/www/receipts_inbox`, archive `/config/www/receipts_archive` (already-processed files are archived with a `_duplicate` suffix).
+- Defaults (Options): inbox `/config/www/receipts_inbox`, archive `/config/www/receipts_archive`.
+  - Receipt dedupe is content-based (SHA-256), so re-uploading the same receipt under a different filename will not create duplicates.
+  - Already-processed duplicates are archived with a `_duplicate` suffix.
+- Archive retention: archived receipt files are deleted after `Archive retention (days)` (default 30 days, configurable 1–90).
+- Receipt processing status: see `sensor.grocery_intel_receipt_processing` (includes `status_counts` and `timing` in attributes).
+- Shopping list automation (Options):
+  - `Auto-add shopping items (daily)`: runs at 07:00 local time and adds items when inventory is likely low
+  - `Auto-add cooldown (days)`: default 7
+  - `Auto-add confidence threshold`: default 0.75
+  - `Pause auto-add when all people away ≥48h`: optional
+- Inventory images (Options):
+  - Upload images to `Inventory images inbox path` (default `/config/www/inventory_images_inbox`)
+  - The integration archives them to `Inventory images archive path` and analyzes them (vision requires `llm_provider=ollama`)
+  - When available, the integration stores `taken_at` (EXIF capture time) for freshness; otherwise it falls back to import time (`created_at`)
+  - Evidence boosts inventory (no exact counts) and suppresses auto-add for `Inventory evidence TTL (days)`
+
+## Dashboard (example)
+Example Lovelace cards (YAML mode):
+
+```yaml
+type: entities
+title: Grocery Intel
+entities:
+  - entity: sensor.grocery_intel_spend_7d
+  - entity: sensor.grocery_intel_spend_30d
+  - entity: sensor.grocery_intel_avg_basket_30d
+  - entity: sensor.grocery_intel_receipt_count_30d
+  - entity: sensor.grocery_intel_receipt_processing
+  - entity: sensor.grocery_intel_top_stores_30d
+  - entity: sensor.grocery_intel_recent_receipts
+  - entity: sensor.grocery_intel_top_price_increases
+  - entity: sensor.grocery_intel_overpaid_items
+  - entity: sensor.grocery_intel_best_store_by_item
+```
+
+The list-style sensors store their details in attributes under `items` (shown in **Developer Tools → States**).

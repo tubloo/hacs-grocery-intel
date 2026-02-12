@@ -31,6 +31,7 @@
           "best_store_window_days": "Best store window (days)",
           "receipts_inbox_path": "Receipts inbox path",
           "receipts_archive_path": "Receipts archive path",
+          "receipts_archive_ttl_days": "Archive retention (days)",
           "inbox_scan_interval_sec": "Inbox scan interval (30–600s)",
           "on_success": "On success",
           "ocr_endpoint_url": "OCR endpoint URL",
@@ -43,7 +44,16 @@
           "llm_api_key": "LLM API key (optional)",
           "llm_base_url": "LLM base URL (optional)",
           "llm_extra_instructions": "LLM extra instructions (optional)",
-          "azure_api_version": "Azure API version"
+          "azure_api_version": "Azure API version",
+          "shopping_auto_approve_enabled": "Auto-add shopping items (daily)",
+          "shopping_auto_approve_cooldown_days": "Auto-add cooldown (days)",
+          "shopping_auto_approve_confidence_threshold": "Auto-add confidence threshold (0.5–0.99)",
+          "shopping_pause_when_all_away": "Pause auto-add when all people away ≥48h",
+          "inventory_images_inbox_path": "Inventory images inbox path",
+          "inventory_images_archive_path": "Inventory images archive path",
+          "inventory_images_archive_ttl_days": "Inventory image retention (days)",
+          "inventory_images_scan_interval_sec": "Inventory image scan interval (30–3600s)",
+          "inventory_images_evidence_ttl_days": "Inventory evidence TTL (days)"
         }
       }
     }

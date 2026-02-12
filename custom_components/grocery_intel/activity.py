@@ -18,6 +18,8 @@ UNDOABLE_KINDS = {
     "receipt_imported_file",
     "ocr_completed",
     "ocr_failed",
+    "shopping_list_auto_run",
+    "inventory_image_analyzed",
 }
 
 
@@ -25,6 +27,7 @@ class ActivityLog:
     """Persist activity records using Home Assistant storage."""
 
     def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
         self._store = storage.Store(hass, ACTIVITY_STORE_VERSION, ACTIVITY_STORE_KEY)
         self._data: dict[str, Any] = {"activities": []}
 
@@ -77,11 +80,12 @@ class ActivityLog:
         if activity.get("kind") not in UNDOABLE_KINDS:
             return False
 
-        receipt_id = activity.get("payload", {}).get("receipt_id")
-        if not receipt_id:
-            return False
-
         kind = activity.get("kind")
+        if kind not in {"shopping_list_auto_run", "inventory_image_analyzed"}:
+            receipt_id = activity.get("payload", {}).get("receipt_id")
+            if not receipt_id:
+                return False
+
         if kind in {"receipt_added", "receipt_imported_file"}:
             deleted = await receipt_storage.async_delete_receipt(receipt_id)
             if not deleted:
@@ -90,6 +94,52 @@ class ActivityLog:
             cleared = await receipt_storage.async_clear_receipt_ocr(receipt_id)
             if not cleared:
                 return False
+        elif kind == "shopping_list_auto_run":
+            try:
+                from .shopping_list_api import async_remove_item
+            except Exception:
+                return False
+
+            added = list(activity.get("payload", {}).get("added") or [])
+            removed = 0
+            for row in added:
+                item_id = row.get("shopping_list_item_id")
+                if not item_id:
+                    continue
+                ok = await async_remove_item(self._hass, str(item_id))
+                if ok:
+                    removed += 1
+
+            await self.async_add_activity(
+                kind="shopping_list_undone",
+                description=f"Undid auto shopping list run ({removed} items removed)",
+                payload={"activity_id": activity_id, "removed": removed},
+            )
+            return True
+        elif kind == "inventory_image_analyzed":
+            boosts = list(activity.get("payload", {}).get("boosts") or [])
+            to_update: dict[str, dict[str, Any]] = {}
+            for row in boosts:
+                pid = row.get("product_id")
+                if not pid:
+                    continue
+                prev = row.get("previous", {})
+                if not isinstance(prev, dict):
+                    prev = {}
+                to_update[str(pid)] = {
+                    "last_seen_at": prev.get("last_seen_at"),
+                    "last_seen_confidence": prev.get("last_seen_confidence"),
+                }
+
+            if to_update:
+                await receipt_storage.async_bulk_update_shopping_product_state(to_update)
+
+            await self.async_add_activity(
+                kind="inventory_image_undone",
+                description="Undid inventory image analysis",
+                payload={"activity_id": activity_id, "restored": len(to_update)},
+            )
+            return True
 
         await self.async_add_activity(
             kind="receipt_undone" if kind in {"receipt_added", "receipt_imported_file"} else "ocr_undone",

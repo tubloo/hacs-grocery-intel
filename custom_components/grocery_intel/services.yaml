@@ -36,9 +36,65 @@ add_receipt:
       selector:
         object:
 
+update_receipt:
+  name: Update receipt
+  description: Update parsed receipt fields and (optionally) replace line items, then reprocess analytics.
+  fields:
+    receipt_id:
+      name: Receipt ID
+      description: Receipt ID to update.
+      required: true
+      selector:
+        text:
+    store_name:
+      name: Store name
+      description: Store/merchant name.
+      required: false
+      selector:
+        text:
+    purchased_at:
+      name: Purchased at
+      description: ISO date or datetime (or common receipt formats). Set to empty to clear.
+      required: false
+      selector:
+        text:
+    total:
+      name: Total
+      description: Receipt total amount.
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+          step: 0.01
+    currency:
+      name: Currency
+      description: Currency symbol (e.g. kr, €, $). Set to empty to clear.
+      required: false
+      selector:
+        text:
+    line_items:
+      name: Line items
+      description: Replace line items with a list of objects (raw_name, line_total, qty_raw, unit_price_raw).
+      required: false
+      selector:
+        object:
+    clear_line_items:
+      name: Clear line items
+      description: Clear stored line items (and derived observations).
+      required: false
+      selector:
+        boolean:
+    reprocess:
+      name: Reprocess
+      description: Re-run matching/observations after updating.
+      required: false
+      selector:
+        boolean:
+
 undo_activity:
   name: Undo activity
-  description: Undo a previous activity (e.g., receipt add/import or OCR completion/failure).
+  description: Undo a previous activity (e.g., receipt add/import or extraction completion/failure).
   fields:
     activity_id:
       name: Activity ID
@@ -74,7 +130,7 @@ scan_receipts_inbox:
 
 run_ocr:
   name: Run OCR
-  description: Run OCR for pending receipts or a specific receipt. If extractor_mode=llm, this triggers LLM file parsing.
+  description: Run extraction for pending receipts or a specific receipt. Uses OCR in heuristic/hybrid mode; triggers LLM file parsing when extractor_mode=llm.
   fields:
     receipt_id:
       name: Receipt ID
@@ -126,3 +182,44 @@ clear_all_data:
       required: true
       selector:
         boolean:
+
+run_auto_shopping:
+  name: Run auto shopping
+  description: Run the daily auto shopping list job now (adds items to the default Home Assistant shopping list).
+  fields:
+    dry_run:
+      name: Dry run
+      description: If enabled, computes candidates but does not add items.
+      required: false
+      selector:
+        boolean:
+
+scan_inventory_images_inbox:
+  name: Scan inventory images inbox
+  description: Scan the inventory images inbox path for new files and archive them. Already-processed files are archived with a _duplicate suffix.
+
+run_inventory_vision:
+  name: Run inventory vision
+  description: Analyze pending inventory images with a vision-capable LLM to boost probabilistic inventory.
+  fields:
+    image_id:
+      name: Image ID
+      description: Inventory image ID to analyze. If omitted, analyzes pending images.
+      required: false
+      selector:
+        text:
+
+reset_stuck_receipts:
+  name: Reset stuck receipts
+  description: Reset receipts stuck in extraction state (queued/running) back to pending so they can be retried.
+  fields:
+    older_than_minutes:
+      name: Older than (minutes)
+      description: Only reset receipts queued/running longer than this. Default 30.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 1440
+          mode: box
+          step: 1

@@ -16,6 +16,7 @@ from .const import (
     CONF_BEST_STORE_WINDOW_DAYS,
     CONF_RECEIPTS_INBOX_PATH,
     CONF_RECEIPTS_ARCHIVE_PATH,
+    CONF_RECEIPTS_ARCHIVE_TTL_DAYS,
     CONF_INBOX_SCAN_INTERVAL_SEC,
     CONF_ON_SUCCESS,
     CONF_OCR_ENDPOINT_URL,
@@ -29,6 +30,15 @@ from .const import (
     CONF_LLM_BASE_URL,
     CONF_LLM_EXTRA_INSTRUCTIONS,
     CONF_AZURE_API_VERSION,
+    CONF_SHOPPING_AUTO_APPROVE_ENABLED,
+    CONF_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
+    CONF_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+    CONF_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+    CONF_INVENTORY_IMAGES_INBOX_PATH,
+    CONF_INVENTORY_IMAGES_ARCHIVE_PATH,
+    CONF_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
+    CONF_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
+    CONF_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
     DEFAULT_CURRENCY_SYMBOL,
     DEFAULT_OVERPAID_PCT_THRESHOLD,
     DEFAULT_BASELINE_WINDOW_N,
@@ -37,6 +47,7 @@ from .const import (
     DEFAULT_BEST_STORE_WINDOW_DAYS,
     DEFAULT_RECEIPTS_INBOX_PATH,
     DEFAULT_RECEIPTS_ARCHIVE_PATH,
+    DEFAULT_RECEIPTS_ARCHIVE_TTL_DAYS,
     DEFAULT_INBOX_SCAN_INTERVAL_SEC,
     DEFAULT_ON_SUCCESS,
     DEFAULT_OCR_ENDPOINT_URL,
@@ -50,6 +61,15 @@ from .const import (
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
     DEFAULT_AZURE_API_VERSION,
+    DEFAULT_SHOPPING_AUTO_APPROVE_ENABLED,
+    DEFAULT_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
+    DEFAULT_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+    DEFAULT_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+    DEFAULT_INVENTORY_IMAGES_INBOX_PATH,
+    DEFAULT_INVENTORY_IMAGES_ARCHIVE_PATH,
+    DEFAULT_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
+    DEFAULT_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
+    DEFAULT_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
 )
 
 
@@ -113,16 +133,6 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             if not self._user_data.get(CONF_AZURE_API_VERSION):
                 self._user_data[CONF_AZURE_API_VERSION] = DEFAULT_AZURE_API_VERSION
 
-            # If extractor mode changed, re-render the form so mode-specific
-            # fields appear/disappear based on the current selection.
-            if mode != self._form_mode:
-                self._form_mode = mode
-                return self.async_show_form(
-                    step_id="init",
-                    data_schema=self._build_schema(mode),
-                    errors={},
-                )
-
             ocr_url = (self._user_data.get(CONF_OCR_ENDPOINT_URL) or "").strip()
             llm_provider = (self._user_data.get(CONF_LLM_PROVIDER) or "").strip()
             llm_model = (self._user_data.get(CONF_LLM_MODEL) or "").strip()
@@ -163,6 +173,11 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
     def _build_schema(self, mode: str) -> vol.Schema:
         fields: dict = {}
 
+        # Always show OCR/LLM settings so users can pre-configure them.
+        # Runtime behavior is still controlled by extractor_mode.
+        show_ocr = True
+        show_llm = True
+
         # Extractor mode first (drives which fields are shown)
         fields[
             vol.Optional(
@@ -176,8 +191,8 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             )
         )
 
-        # OCR fields (only when used)
-        if mode in {"heuristic", "hybrid"}:
+        # OCR fields
+        if show_ocr:
             fields[
                 vol.Optional(
                     CONF_OCR_ENDPOINT_URL,
@@ -210,8 +225,8 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 )
             )
 
-        # LLM fields (only when used)
-        if mode in {"llm", "hybrid"}:
+        # LLM fields
+        if show_llm:
             fields[
                 vol.Optional(
                     CONF_LLM_PROVIDER,
@@ -329,6 +344,22 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
         ] = str
         fields[
             vol.Optional(
+                CONF_RECEIPTS_ARCHIVE_TTL_DAYS,
+                default=self._opt_default(
+                    CONF_RECEIPTS_ARCHIVE_TTL_DAYS, DEFAULT_RECEIPTS_ARCHIVE_TTL_DAYS
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=90,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="d",
+            )
+        )
+        fields[
+            vol.Optional(
                 CONF_INBOX_SCAN_INTERVAL_SEC,
                 default=self._opt_default(
                     CONF_INBOX_SCAN_INTERVAL_SEC, DEFAULT_INBOX_SCAN_INTERVAL_SEC
@@ -339,7 +370,7 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 min=30,
                 max=600,
                 step=10,
-                mode=selector.NumberSelectorMode.SLIDER,
+                mode=selector.NumberSelectorMode.BOX,
                 unit_of_measurement="s",
             )
         )
@@ -349,5 +380,127 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 default=self._opt_default(CONF_ON_SUCCESS, DEFAULT_ON_SUCCESS),
             )
         ] = str
+
+        fields[
+            vol.Optional(
+                CONF_SHOPPING_AUTO_APPROVE_ENABLED,
+                default=self._opt_default(
+                    CONF_SHOPPING_AUTO_APPROVE_ENABLED,
+                    DEFAULT_SHOPPING_AUTO_APPROVE_ENABLED,
+                ),
+            )
+        ] = selector.BooleanSelector()
+
+        fields[
+            vol.Optional(
+                CONF_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
+                default=self._opt_default(
+                    CONF_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
+                    DEFAULT_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=30,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="d",
+            )
+        )
+
+        fields[
+            vol.Optional(
+                CONF_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+                default=self._opt_default(
+                    CONF_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+                    DEFAULT_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+                ),
+            )
+        ] = vol.All(float, vol.Range(min=0.5, max=0.99))
+
+        fields[
+            vol.Optional(
+                CONF_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+                default=self._opt_default(
+                    CONF_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+                    DEFAULT_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+                ),
+            )
+        ] = selector.BooleanSelector()
+
+        fields[
+            vol.Optional(
+                CONF_INVENTORY_IMAGES_INBOX_PATH,
+                default=self._opt_default(
+                    CONF_INVENTORY_IMAGES_INBOX_PATH,
+                    DEFAULT_INVENTORY_IMAGES_INBOX_PATH,
+                ),
+            )
+        ] = str
+
+        fields[
+            vol.Optional(
+                CONF_INVENTORY_IMAGES_ARCHIVE_PATH,
+                default=self._opt_default(
+                    CONF_INVENTORY_IMAGES_ARCHIVE_PATH,
+                    DEFAULT_INVENTORY_IMAGES_ARCHIVE_PATH,
+                ),
+            )
+        ] = str
+
+        fields[
+            vol.Optional(
+                CONF_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
+                default=self._opt_default(
+                    CONF_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
+                    DEFAULT_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=90,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="d",
+            )
+        )
+
+        fields[
+            vol.Optional(
+                CONF_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
+                default=self._opt_default(
+                    CONF_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
+                    DEFAULT_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=30,
+                max=3600,
+                step=30,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="s",
+            )
+        )
+
+        fields[
+            vol.Optional(
+                CONF_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
+                default=self._opt_default(
+                    CONF_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
+                    DEFAULT_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=30,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="d",
+            )
+        )
 
         return vol.Schema(fields)
