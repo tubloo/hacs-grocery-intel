@@ -4,6 +4,8 @@
 
 Local-first Home Assistant integration for tracking grocery receipts and spend totals.
 
+Grocery Intel is a local-first Home Assistant integration that turns grocery receipts and pantry/fridge photos into practical household insights. It automatically ingests receipts, extracts totals, dates, stores, and (when available) line items using OCR and/or LLMs, then builds analytics like spend trends, store comparisons, price changes, and a canonical list of the items you typically buy. For day-to-day usefulness, it maintains a probabilistic “inventory confidence” (not exact counts) and can suggest shopping list items based on purchase cadence and low-confidence signals. Every automated action is logged, explainable, and undoable, and all data is stored locally in Home Assistant.
+
 ## Privacy & Data Handling
 
 - Grocery Intel stores receipts and derived data locally in your Home Assistant storage (e.g., under `/config/.storage/`).
