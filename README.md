@@ -47,6 +47,18 @@ Local-first Home Assistant integration for tracking grocery receipts and spend t
 - Inventory freshness: items “recently seen” via pantry/fridge images (boost-only evidence; no exact counts)
 - Pipeline health: receipt processing status counts and timing breakdowns (overall/by method/provider)
 
+## Data model (high level)
+Grocery Intel stores its richer data in Home Assistant storage (`/config/.storage/grocery_intel.data`). Sensors are summaries over that data.
+
+- Receipts: one row per receipt (source file, `purchased_at`, `total`, `store_name`, `extract_status`, timing fields, optional `content_hash`)
+- Stores: canonical store entities (`store_entity_id`) used to group receipts even when names vary
+- Line items: raw line items per receipt (when extraction provides them)
+- Products: normalized/canonical products created from line items and inventory-image detections
+- Observations: per-product purchase “events” derived from line items (used for price/pattern analytics)
+- Inventory images: inbox-imported pantry/fridge/cupboard photos with `taken_at` (EXIF, when available), analysis status, and detected items
+- Processed file indexes: fingerprints/hashes used to avoid importing the same file twice
+- Activity log: auditable history of automatic/manual actions (imports, duplicates, extraction done/failed, auto-shopping runs, image analysis) with undo where possible
+
 ## Entities
 - `sensor.grocery_intel_spend_week`
 - `sensor.grocery_intel_spend_month`
