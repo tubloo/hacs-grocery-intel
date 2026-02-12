@@ -38,6 +38,15 @@ Local-first Home Assistant integration for tracking grocery receipts and spend t
 - Inventory images (fridge/pantry/cupboard) inbox + vision analysis (optional)
 - Alcohol item normalization (Beer/Wine/Cider/Spirits)
 
+## What you can analyze
+- Spend trends: weekly/monthly totals, rolling 7/30 days, average basket size, receipt counts
+- Store insights: top stores by spend and spend split across stores (within the selected window)
+- Receipt timeline: recent receipts (store/date/total/filename) to spot gaps and spikes
+- Item-level analytics (when line items are available): price history, top increases, overpaid items, best store by item
+- Purchase cadence: how frequently items appear across receipts (useful for shopping list suggestions)
+- Inventory freshness: items “recently seen” via pantry/fridge images (boost-only evidence; no exact counts)
+- Pipeline health: receipt processing status counts and timing breakdowns (overall/by method/provider)
+
 ## Entities
 - `sensor.grocery_intel_spend_week`
 - `sensor.grocery_intel_spend_month`
