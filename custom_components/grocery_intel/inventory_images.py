@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import json
 import io
 import os
@@ -21,16 +22,20 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_LLM_PROVIDER,
     CONF_LLM_MODEL,
+    CONF_LLM_API_KEY,
     CONF_LLM_BASE_URL,
     CONF_LLM_EXTRA_INSTRUCTIONS,
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_API_KEY,
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
 )
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 HEIC_EXTENSIONS = {".heic", ".heif"}
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _fingerprint_bytes(content: bytes) -> str:
@@ -317,6 +322,29 @@ def _extract_first_json_object(text: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _extract_openai_output_text(payload: dict[str, Any]) -> str:
+    out = payload.get("output_text")
+    if isinstance(out, str) and out.strip():
+        return out
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+    chunks: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            txt = part.get("text")
+            if isinstance(txt, str) and txt.strip():
+                chunks.append(txt)
+    return "\n".join(chunks).strip()
+
+
 def _normalize_detected_items(raw: Any) -> list[dict[str, Any]]:
     """Return list of detected items with label + confidence."""
     items: list[dict[str, Any]] = []
@@ -381,48 +409,131 @@ async def async_analyze_inventory_image(
 ) -> dict[str, Any]:
     llm_provider = (entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or "").strip()
     llm_model = (entry.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL) or "").strip()
+    llm_api_key = (entry.options.get(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY) or "").strip()
     llm_base_url = (entry.options.get(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL) or "").strip()
     llm_extra = (entry.options.get(CONF_LLM_EXTRA_INSTRUCTIONS, DEFAULT_LLM_EXTRA_INSTRUCTIONS) or "").strip()
 
-    if llm_provider.lower() != "ollama" or not llm_model:
+    provider = llm_provider.lower()
+    if not llm_model:
         return {}
 
-    base = llm_base_url or "http://host.docker.internal:11434"
     session = async_get_clientsession(hass)
-    url = _join_url(base, "/api/chat")
-    payload = {
-        "model": llm_model,
-        "stream": False,
-        "format": "json",
-        "messages": [
-            {"role": "system", "content": _llm_inventory_system_prompt(llm_extra)},
-            {
-                "role": "user",
-                "content": f"Analyze inventory photo: {filename}",
-                "images": [image_b64],
-            },
-        ],
-        "options": {"temperature": 0},
-    }
-    try:
-        async with session.post(
-            url,
-            timeout=aiohttp.ClientTimeout(total=120),
-            json=payload,
-        ) as response:
-            if response.status >= 400:
-                raise aiohttp.ClientError(f"HTTP {response.status}")
-            data = await response.json()
-    except Exception:
-        return {}
+    system_prompt = _llm_inventory_system_prompt(llm_extra)
 
-    if not isinstance(data, dict):
-        return {}
-    msg = data.get("message", {})
-    content = msg.get("content") if isinstance(msg, dict) else ""
-    if not isinstance(content, str):
-        return {}
-    return _extract_first_json_object(content)
+    if provider == "ollama":
+        base = llm_base_url or "http://host.docker.internal:11434"
+        url = _join_url(base, "/api/chat")
+        payload = {
+            "model": llm_model,
+            "stream": False,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": f"Analyze inventory photo: {filename}",
+                    "images": [image_b64],
+                },
+            ],
+            "options": {"temperature": 0},
+        }
+        try:
+            async with session.post(
+                url,
+                timeout=aiohttp.ClientTimeout(total=120),
+                json=payload,
+            ) as response:
+                if response.status >= 400:
+                    raise aiohttp.ClientError(f"HTTP {response.status}")
+                data = await response.json()
+        except Exception as err:
+            _LOGGER.warning("LLM inventory analyzer (Ollama) failed for %s: %s", filename, err)
+            return {}
+
+        if not isinstance(data, dict):
+            return {}
+        msg = data.get("message", {})
+        content = msg.get("content") if isinstance(msg, dict) else ""
+        if not isinstance(content, str):
+            return {}
+        return _extract_first_json_object(content)
+
+    if provider == "openai":
+        if not llm_api_key:
+            _LOGGER.warning("LLM inventory analyzer (OpenAI) missing API key; skipping")
+            return {}
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in {".png"}:
+            mime = "image/png"
+        elif ext in {".webp"}:
+            mime = "image/webp"
+        else:
+            # HEIC/HEIF conversion produces JPEG bytes; JPEG is also a safe fallback.
+            mime = "image/jpeg"
+        base = llm_base_url or "https://api.openai.com"
+        url = _join_url(base, "/v1/responses")
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "detected_items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "label": {"type": "string"},
+                            "confidence": {"type": "number"},
+                        },
+                        "required": ["label", "confidence"],
+                    },
+                }
+            },
+            "required": ["detected_items"],
+        }
+        data_url = f"data:{mime};base64,{image_b64}"
+        payload = {
+            "model": llm_model,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": f"filename: {filename}\nAnalyze inventory photo."},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                },
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "inventory_items",
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        }
+        try:
+            async with session.post(
+                url,
+                timeout=aiohttp.ClientTimeout(total=120),
+                headers={"Authorization": f"Bearer {llm_api_key}"},
+                json=payload,
+            ) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    raise RuntimeError(f"OpenAI HTTP {response.status}: {body[:500]}")
+                data = await response.json()
+        except Exception as err:
+            _LOGGER.warning("LLM inventory analyzer (OpenAI) failed for %s: %s", filename, err)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out_text = _extract_openai_output_text(data)
+        return _extract_first_json_object(out_text)
+
+    _LOGGER.warning("LLM inventory analyzer: unsupported provider=%s", llm_provider)
+    return {}
 
 
 def normalize_items_from_llm_result(result: dict[str, Any]) -> list[str]:

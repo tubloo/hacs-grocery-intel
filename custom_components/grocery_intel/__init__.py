@@ -18,6 +18,7 @@ from typing import Any
 import mimetypes
 import time
 import hashlib
+from urllib.parse import quote_plus
 
 import voluptuous as vol
 
@@ -40,6 +41,7 @@ from .inventory_images import (
     scan_inventory_images_inbox_sync,
     normalize_items_with_confidence_from_llm_result,
     _read_file_base64_sync as _inventory_read_file_b64_sync,
+    _extract_taken_at_iso_sync as _inventory_extract_taken_at_iso_sync,
     async_analyze_inventory_image,
 )
 from .storage import ReceiptStorage
@@ -97,23 +99,37 @@ from .const import (
     DEFAULT_INVENTORY_IMAGES_ARCHIVE_PATH,
     DEFAULT_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
     DEFAULT_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
+    CONF_TELEGRAM_BOT_TOKEN,
+    CONF_TELEGRAM_ALLOWED_CHAT_IDS,
+    CONF_TELEGRAM_AUTO_DETECT,
+    CONF_TELEGRAM_SEND_FEEDBACK,
+    DEFAULT_TELEGRAM_BOT_TOKEN,
+    DEFAULT_TELEGRAM_ALLOWED_CHAT_IDS,
+    DEFAULT_TELEGRAM_AUTO_DETECT,
+    DEFAULT_TELEGRAM_SEND_FEEDBACK,
     SERVICE_SCAN_INVENTORY_IMAGES_INBOX,
     SERVICE_RUN_INVENTORY_VISION,
     SERVICE_RESET_STUCK_RECEIPTS,
+    SERVICE_TELEGRAM_INGEST,
 )
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 SIGNAL_REFRESH = "grocery_intel_refresh"
 
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif"}
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 HEIC_EXTENSIONS = {".heic", ".heif"}
+
+# Safety guard for Telegram ingests (avoid downloading huge files into HA memory).
+# Telegram Bot API file sizes vary by client/type; keep conservative.
+TELEGRAM_MAX_FILE_BYTES = 25 * 1024 * 1024  # 25 MB
 
 _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
 class GroceryIntelData:
+    hass: HomeAssistant
     storage: ReceiptStorage
     activity: ActivityLog
     coordinator: GrocerySpendCoordinator
@@ -139,6 +155,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     data = GroceryIntelData(
+        hass=hass,
         storage=storage,
         activity=activity,
         coordinator=coordinator,
@@ -635,6 +652,175 @@ def _register_services(hass: HomeAssistant) -> None:
             )
             await data.coordinator.async_refresh()
 
+    async def handle_telegram_ingest(call: ServiceCall) -> None:
+        """Ingest a Telegram attachment into receipts or inventory images."""
+        data = _get_data(hass)
+        entry = _get_entry(hass)
+        if data is None or entry is None:
+            return
+
+        token = (entry.options.get(CONF_TELEGRAM_BOT_TOKEN, DEFAULT_TELEGRAM_BOT_TOKEN) or "").strip()
+        if not token:
+            _LOGGER.warning("Telegram ingest called but telegram_bot_token is not configured")
+            return
+
+        allowed_raw = entry.options.get(
+            CONF_TELEGRAM_ALLOWED_CHAT_IDS, DEFAULT_TELEGRAM_ALLOWED_CHAT_IDS
+        )
+        allowed = _parse_telegram_allowed_chat_ids(allowed_raw)
+        chat_id = _coerce_int(call.data.get("chat_id"))
+        if chat_id is None:
+            _LOGGER.warning("Telegram ingest missing/invalid chat_id")
+            return
+        if allowed and chat_id not in allowed:
+            _LOGGER.warning("Telegram ingest rejected from chat_id=%s (not in allowlist)", chat_id)
+            return
+
+        file_id = str(call.data.get("file_id") or "").strip()
+        if not file_id:
+            _LOGGER.warning("Telegram ingest missing file_id")
+            return
+
+        kind = str(call.data.get("kind") or "auto").strip().lower()
+        if kind not in {"auto", "receipt", "inventory"}:
+            kind = "auto"
+        caption = _safe_str(call.data.get("caption"))
+        message_id = _coerce_int(call.data.get("message_id"))
+        filename_override = _safe_str(call.data.get("filename"))
+
+        send_feedback = bool(
+            entry.options.get(CONF_TELEGRAM_SEND_FEEDBACK, DEFAULT_TELEGRAM_SEND_FEEDBACK)
+        )
+
+        try:
+            info = await _async_telegram_get_file_info(hass, token=token, file_id=file_id)
+            file_path = _safe_str(info.get("file_path"))
+            if not file_path:
+                raise RuntimeError("Telegram getFile returned no file_path")
+            name_for_log = filename_override or os.path.basename(str(file_path)) or file_id
+            file_size = info.get("file_size")
+            try:
+                file_size_i = int(file_size) if file_size is not None else None
+            except Exception:
+                file_size_i = None
+            if file_size_i is not None and file_size_i > TELEGRAM_MAX_FILE_BYTES:
+                msg = (
+                    f"File too large ({file_size_i/1024/1024:.1f} MB). "
+                    f"Limit is {TELEGRAM_MAX_FILE_BYTES/1024/1024:.0f} MB."
+                )
+                _LOGGER.warning(
+                    "Telegram ingest rejected oversized file (size=%s): %s", file_size_i, name_for_log
+                )
+                if send_feedback:
+                    await _async_telegram_send_message(
+                        hass,
+                        token=token,
+                        chat_id=chat_id,
+                        text=msg,
+                        reply_to_message_id=message_id,
+                    )
+                return
+            content = await _async_telegram_download_file_bytes(hass, token=token, file_path=file_path)
+        except Exception as err:
+            _LOGGER.warning("Telegram ingest download failed: %s", err)
+            if send_feedback:
+                await _async_telegram_send_message(
+                    hass,
+                    token=token,
+                    chat_id=chat_id,
+                    text=f"Failed to download file from Telegram: {err}",
+                    reply_to_message_id=message_id,
+                )
+            return
+
+        detected_name = filename_override or os.path.basename(str(file_path))
+        detected_ext = os.path.splitext(detected_name)[1].lower()
+        if not detected_ext:
+            detected_ext = _detect_ext_from_bytes(content) or ""
+            detected_name = (detected_name or "telegram_upload") + (detected_ext or "")
+
+        auto_detect = bool(entry.options.get(CONF_TELEGRAM_AUTO_DETECT, DEFAULT_TELEGRAM_AUTO_DETECT))
+        final_kind = kind
+        confidence = 1.0
+        reason = "explicit"
+        if kind == "auto":
+            if not auto_detect:
+                final_kind = "receipt"
+                confidence = 0.4
+                reason = "auto_detect_disabled_default_receipt"
+            else:
+                final_kind, confidence, reason = await _async_classify_telegram_upload(
+                    hass,
+                    entry=entry,
+                    filename=detected_name,
+                    caption=caption,
+                    content=content,
+                )
+
+        source_meta = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "file_id": file_id,
+            "filename": detected_name,
+            "caption": caption,
+            "classified_as": final_kind,
+            "classify_confidence": round(float(confidence), 3),
+            "classify_reason": reason,
+        }
+
+        if final_kind == "inventory":
+            image_id, archived_path, duplicate = await _async_ingest_inventory_image_bytes(
+                hass,
+                entry=entry,
+                data=data,
+                filename=detected_name,
+                content=content,
+                source_meta=source_meta,
+            )
+            if send_feedback:
+                if duplicate:
+                    await _async_telegram_send_message(
+                        hass,
+                        token=token,
+                        chat_id=chat_id,
+                        text=f"Duplicate inventory image archived: {os.path.basename(archived_path)}",
+                        reply_to_message_id=message_id,
+                    )
+                elif image_id:
+                    await _async_telegram_send_message(
+                        hass,
+                        token=token,
+                        chat_id=chat_id,
+                        text=f"Inventory image received ({os.path.basename(archived_path)}). Queued for analysis.",
+                        reply_to_message_id=message_id,
+                    )
+        else:
+            receipt_id, archived_path, duplicate = await _async_ingest_receipt_bytes(
+                hass,
+                entry=entry,
+                data=data,
+                filename=detected_name,
+                content=content,
+                source_meta=source_meta,
+            )
+            if send_feedback:
+                if duplicate:
+                    await _async_telegram_send_message(
+                        hass,
+                        token=token,
+                        chat_id=chat_id,
+                        text=f"Duplicate receipt archived: {os.path.basename(archived_path)}",
+                        reply_to_message_id=message_id,
+                    )
+                elif receipt_id:
+                    await _async_telegram_send_message(
+                        hass,
+                        token=token,
+                        chat_id=chat_id,
+                        text=f"Receipt received ({os.path.basename(archived_path)}). Queued for extraction.",
+                        reply_to_message_id=message_id,
+                    )
+
     _reg(
         SERVICE_ADD_RECEIPT,
         handle_add_receipt,
@@ -734,6 +920,21 @@ def _register_services(hass: HomeAssistant) -> None:
         vol.Schema({vol.Optional("older_than_minutes", default=30): vol.All(int, vol.Range(min=1, max=1440))}),
     )
 
+    _reg(
+        SERVICE_TELEGRAM_INGEST,
+        handle_telegram_ingest,
+        vol.Schema(
+            {
+                vol.Required("chat_id"): vol.Any(int, cv.string),
+                vol.Required("file_id"): cv.string,
+                vol.Optional("filename"): cv.string,
+                vol.Optional("caption"): cv.string,
+                vol.Optional("message_id"): vol.Any(int, cv.string),
+                vol.Optional("kind", default="auto"): cv.string,
+            }
+        ),
+    )
+
 
 def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_ADD_RECEIPT)
@@ -748,6 +949,7 @@ def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_SCAN_INVENTORY_IMAGES_INBOX)
     hass.services.async_remove(DOMAIN, SERVICE_RUN_INVENTORY_VISION)
     hass.services.async_remove(DOMAIN, SERVICE_RESET_STUCK_RECEIPTS)
+    hass.services.async_remove(DOMAIN, SERVICE_TELEGRAM_INGEST)
 
 
 def _get_entry(hass: HomeAssistant) -> ConfigEntry | None:
@@ -764,6 +966,622 @@ def _get_data(hass: HomeAssistant) -> GroceryIntelData | None:
         return None
 
     return hass.data.get(DOMAIN, {}).get(entry.entry_id)
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def _parse_telegram_allowed_chat_ids(value: Any) -> set[int]:
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        out: set[int] = set()
+        for v in value:
+            i = _coerce_int(v)
+            if i is not None:
+                out.add(i)
+        return out
+    text = str(value).strip()
+    if not text:
+        return set()
+    out: set[int] = set()
+    for part in re.split(r"[,\s]+", text):
+        part = part.strip()
+        if not part:
+            continue
+        i = _coerce_int(part)
+        if i is not None:
+            out.add(i)
+    return out
+
+
+async def _async_telegram_get_file_info(
+    hass: HomeAssistant, *, token: str, file_id: str
+) -> dict[str, Any]:
+    session = async_get_clientsession(hass)
+    url = f"https://api.telegram.org/bot{token}/getFile?file_id={quote_plus(file_id)}"
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        data = await resp.json()
+    if not isinstance(data, dict) or not data.get("ok"):
+        raise RuntimeError(f"Telegram getFile failed: {data}")
+    result = data.get("result")
+    return result if isinstance(result, dict) else {}
+
+
+async def _async_telegram_download_file_bytes(
+    hass: HomeAssistant, *, token: str, file_path: str
+) -> bytes:
+    session = async_get_clientsession(hass)
+    url = f"https://api.telegram.org/file/bot{token}/{file_path.lstrip('/')}"
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+        if resp.status >= 400:
+            body = await resp.text()
+            raise RuntimeError(f"Telegram download failed HTTP {resp.status}: {body[:200]}")
+        return await resp.read()
+
+
+async def _async_telegram_send_message(
+    hass: HomeAssistant,
+    *,
+    token: str,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+) -> None:
+    session = async_get_clientsession(hass)
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+    if reply_to_message_id is not None:
+        payload["reply_to_message_id"] = reply_to_message_id
+    try:
+        async with session.post(
+            url, timeout=aiohttp.ClientTimeout(total=30), json=payload
+        ) as resp:
+            _ = await resp.text()
+    except Exception as err:
+        _LOGGER.debug("Telegram sendMessage failed: %s", err)
+
+
+def _format_iso_dt_for_user(hass: HomeAssistant, value: Any) -> str:
+    """Format an ISO datetime/date string in Home Assistant's local timezone."""
+    if not value:
+        return "Unknown"
+    raw = str(value).strip()
+    if not raw:
+        return "Unknown"
+    dt = dt_util.parse_datetime(raw)
+    if dt is None:
+        # Support date-only strings.
+        d = dt_util.parse_date(raw)
+        if d is None:
+            return raw
+        dt = dt_util.as_utc(dt_util.start_of_local_day(d))
+    local = dt_util.as_local(dt)
+    try:
+        # Example: "Fri 13 Feb 2026 22:11"
+        return local.strftime("%a %d %b %Y %H:%M")
+    except Exception:
+        return local.isoformat()
+
+
+def _detect_ext_from_bytes(content: bytes) -> str | None:
+    if not content:
+        return None
+    if content.startswith(b"%PDF"):
+        return ".pdf"
+    if content[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if content.startswith(b"RIFF") and b"WEBP" in content[:16]:
+        return ".webp"
+    # HEIC/HEIF (ISO BMFF) signatures typically contain ftyp* brands.
+    if content[4:12] == b"ftypheic" or content[4:12] == b"ftypheif":
+        return ".heic"
+    return None
+
+
+async def _async_classify_telegram_upload(
+    hass: HomeAssistant,
+    *,
+    entry: ConfigEntry,
+    filename: str,
+    caption: str | None,
+    content: bytes,
+) -> tuple[str, float, str]:
+    ext = os.path.splitext(filename)[1].lower()
+    low_caption = (caption or "").casefold()
+
+    inv_keywords = {"inventory", "fridge", "pantry", "cupboard", "kyl", "skafferi"}
+    rec_keywords = {"receipt", "kvitto", "kvittot"}
+    if any(k in low_caption for k in inv_keywords):
+        return "inventory", 0.95, "caption_keyword"
+    if any(k in low_caption for k in rec_keywords):
+        return "receipt", 0.95, "caption_keyword"
+
+    if ext == ".pdf" or content.startswith(b"%PDF"):
+        return "receipt", 0.95, "pdf_default_receipt"
+
+    if ext not in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}:
+        return "receipt", 0.4, "unknown_extension_default_receipt"
+
+    llm_provider = (entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or "").strip().lower()
+    llm_model = (entry.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL) or "").strip()
+    llm_base_url = (entry.options.get(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL) or "").strip()
+    llm_api_key = (entry.options.get(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY) or "").strip()
+
+    if not llm_provider or not llm_model:
+        return "receipt", 0.4, "no_llm_config_default_receipt"
+
+    # Write to a temporary file so we can reuse existing HEIC conversion logic.
+    tmp = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(prefix="grocery_intel_tg_", suffix=ext or ".bin", delete=False)
+        tmp.write(content)
+        tmp.close()
+        img_b64 = await hass.async_add_executor_job(_inventory_read_file_b64_sync, tmp.name)
+    finally:
+        if tmp is not None:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
+
+    if not img_b64:
+        return "receipt", 0.4, "image_read_failed_default_receipt"
+
+    image_mime = "image/jpeg"
+    if ext in {".png"}:
+        image_mime = "image/png"
+    elif ext in {".webp"}:
+        image_mime = "image/webp"
+    elif ext in HEIC_EXTENSIONS:
+        image_mime = "image/jpeg"
+
+    try:
+        if llm_provider == "openai":
+            if not llm_api_key:
+                return "receipt", 0.4, "openai_missing_key_default_receipt"
+            base = llm_base_url or "https://api.openai.com"
+            out = await _async_llm_openai_vision_classify(
+                hass=hass,
+                base_url=base,
+                api_key=llm_api_key,
+                model=llm_model,
+                filename=filename,
+                image_b64=img_b64,
+                image_mime=image_mime,
+            )
+            return out
+        if llm_provider == "ollama":
+            base = llm_base_url or "http://host.docker.internal:11434"
+            out = await _async_llm_ollama_vision_classify(
+                hass=hass,
+                base_url=base,
+                model=llm_model,
+                filename=filename,
+                image_b64=img_b64,
+            )
+            return out
+    except Exception:
+        pass
+
+    return "receipt", 0.4, "classifier_failed_default_receipt"
+
+
+async def _async_llm_openai_vision_classify(
+    *,
+    hass: HomeAssistant,
+    base_url: str,
+    api_key: str,
+    model: str,
+    filename: str,
+    image_b64: str,
+    image_mime: str,
+) -> tuple[str, float, str]:
+    session = async_get_clientsession(hass)
+    url = _join_url(base_url, "/v1/responses")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "kind": {"type": "string", "enum": ["receipt", "inventory"]},
+            "confidence": {"type": "number"},
+            "reason": {"type": "string"},
+        },
+        "required": ["kind", "confidence", "reason"],
+    }
+    data_url = f"data:{image_mime};base64,{image_b64}"
+    system = (
+        "You classify user uploads for a Home Assistant system.\n"
+        "Task: determine if the image is a grocery RECEIPT (paper receipt with totals/prices) or an INVENTORY photo "
+        "(fridge/pantry/cupboard contents). Return JSON only."
+    )
+    payload = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": f"filename: {filename}\nClassify the attached image."},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "classification",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+    }
+    async with session.post(
+        url,
+        timeout=aiohttp.ClientTimeout(total=60),
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=payload,
+    ) as resp:
+        if resp.status >= 400:
+            body = await resp.text()
+            raise RuntimeError(f"OpenAI HTTP {resp.status}: {body[:200]}")
+        data = await resp.json()
+    out_text = _extract_openai_output_text(data) if isinstance(data, dict) else ""
+    parsed = _extract_first_json_object(out_text)
+    kind = str(parsed.get("kind") or "").strip().lower()
+    try:
+        conf = float(parsed.get("confidence", 0.5))
+    except Exception:
+        conf = 0.5
+    conf = max(0.0, min(1.0, conf))
+    reason = _safe_str(parsed.get("reason")) or "openai_classifier"
+    if kind not in {"receipt", "inventory"}:
+        return "receipt", 0.4, "openai_classifier_invalid"
+    return kind, conf, reason
+
+
+async def _async_llm_ollama_vision_classify(
+    *,
+    hass: HomeAssistant,
+    base_url: str,
+    model: str,
+    filename: str,
+    image_b64: str,
+) -> tuple[str, float, str]:
+    system = (
+        "You classify user uploads for a Home Assistant system.\n"
+        "Decide if the image is a grocery RECEIPT (paper receipt with totals/prices) or an INVENTORY photo "
+        "(fridge/pantry/cupboard contents).\n"
+        "Return JSON only with keys: kind (receipt|inventory), confidence (0-1), reason."
+    )
+    session = async_get_clientsession(hass)
+    url = _join_url(base_url, "/api/chat")
+    payload = {
+        "model": model,
+        "stream": False,
+        "format": "json",
+        "messages": [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": f"filename: {filename}\nClassify the attached image.",
+                "images": [image_b64],
+            },
+        ],
+        "options": {"temperature": 0},
+    }
+    async with session.post(
+        url, timeout=aiohttp.ClientTimeout(total=60), json=payload
+    ) as resp:
+        if resp.status >= 400:
+            body = await resp.text()
+            raise RuntimeError(f"Ollama HTTP {resp.status}: {body[:200]}")
+        data = await resp.json()
+    msg = data.get("message", {}) if isinstance(data, dict) else {}
+    content = msg.get("content") if isinstance(msg, dict) else ""
+    parsed = _extract_first_json_object(content) if isinstance(content, str) else {}
+    kind = str(parsed.get("kind") or "").strip().lower()
+    try:
+        conf = float(parsed.get("confidence", 0.5))
+    except Exception:
+        conf = 0.5
+    conf = max(0.0, min(1.0, conf))
+    reason = _safe_str(parsed.get("reason")) or "ollama_classifier"
+    if kind not in {"receipt", "inventory"}:
+        return "receipt", 0.4, "ollama_classifier_invalid"
+    return kind, conf, reason
+
+
+async def _async_ingest_receipt_bytes(
+    hass: HomeAssistant,
+    *,
+    entry: ConfigEntry,
+    data: GroceryIntelData,
+    filename: str,
+    content: bytes,
+    source_meta: dict[str, Any],
+) -> tuple[str | None, str, bool]:
+    archive_path = entry.options.get(CONF_RECEIPTS_ARCHIVE_PATH, DEFAULT_RECEIPTS_ARCHIVE_PATH)
+    if not hass.config.is_allowed_path(archive_path):
+        raise RuntimeError("Receipts archive path is not allowed")
+    os.makedirs(archive_path, exist_ok=True)
+
+    content_hash = hashlib.sha256(content).hexdigest()
+    fingerprint = f"sha256:{content_hash}"
+    processed = await data.storage.async_get_processed_fingerprints()
+    processed |= await data.storage.async_get_receipt_content_hash_fingerprints()
+
+    now_ts = time.time()
+    if fingerprint in processed:
+        dest = _unique_dest_path(archive_path, filename, suffix="_duplicate")
+        await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
+        await data.activity.async_add_activity(
+            kind="receipt_duplicate_file",
+            description=(
+                "Archived duplicate receipt file with suffix: "
+                f"{filename} -> {os.path.basename(dest)}"
+            ),
+            payload={"filename": filename, "to_path": dest, "source": "telegram"},
+        )
+        return None, dest, True
+
+    dest = _unique_dest_path(archive_path, filename)
+    await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
+
+    receipt = await data.storage.async_add_receipt(
+        total=None,
+        date_str=None,
+        store=None,
+        raw_text=None,
+        currency=None,
+        line_items=None,
+        source_type="telegram",
+        file_path=dest,
+        filename=os.path.basename(dest),
+    )
+    await data.storage.async_update_receipt(
+        receipt["id"], {"content_hash": content_hash, "source_meta": source_meta}
+    )
+    await data.storage.async_mark_processed(
+        fingerprint,
+        {
+            "fingerprint": fingerprint,
+            "content_hash": content_hash,
+            "archived_path": dest,
+            "filename": os.path.basename(dest),
+            "size": len(content),
+            "processed_at": dt_util.now().isoformat(),
+            "source": "telegram",
+        },
+    )
+    await data.activity.async_add_activity(
+        kind="receipt_imported_file",
+        description=f"Imported receipt file (Telegram): {os.path.basename(dest)}",
+        payload={"receipt_id": receipt["id"], "filename": os.path.basename(dest), "source": "telegram"},
+    )
+
+    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
+    await data.storage.async_update_receipt(
+        receipt["id"],
+        {"extract_status": "queued", "extract_queued_at": dt_util.now().isoformat()},
+    )
+    if extractor_mode == "llm":
+        hass.async_create_task(
+            _async_run_llm_for_receipt_file(hass, entry, data, receipt, overwrite=False, force=True)
+        )
+    else:
+        hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
+    await data.coordinator.async_refresh()
+    return receipt["id"], dest, False
+
+
+async def _async_ingest_inventory_image_bytes(
+    hass: HomeAssistant,
+    *,
+    entry: ConfigEntry,
+    data: GroceryIntelData,
+    filename: str,
+    content: bytes,
+    source_meta: dict[str, Any],
+) -> tuple[str | None, str, bool]:
+    archive_path = entry.options.get(
+        CONF_INVENTORY_IMAGES_ARCHIVE_PATH, DEFAULT_INVENTORY_IMAGES_ARCHIVE_PATH
+    )
+    if not hass.config.is_allowed_path(archive_path):
+        raise RuntimeError("Inventory images archive path is not allowed")
+    os.makedirs(archive_path, exist_ok=True)
+
+    fingerprint = hashlib.sha256(content).hexdigest()
+    processed = await data.storage.async_get_processed_inventory_images()
+    processed |= await data.storage.async_get_inventory_image_fingerprints()
+
+    now_ts = time.time()
+    if fingerprint in processed:
+        dest = _unique_dest_path(archive_path, filename, suffix="_duplicate")
+        await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
+        await data.activity.async_add_activity(
+            kind="inventory_image_duplicate_file",
+            description=(
+                "Archived duplicate inventory image with suffix: "
+                f"{filename} -> {os.path.basename(dest)}"
+            ),
+            payload={"filename": filename, "to_path": dest, "source": "telegram"},
+        )
+        return None, dest, True
+
+    dest = _unique_dest_path(archive_path, filename)
+    await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
+    taken_at = await hass.async_add_executor_job(_inventory_extract_taken_at_iso_sync, dest)
+
+    row = await data.storage.async_add_inventory_image(
+        archived_path=dest,
+        filename=os.path.basename(dest),
+        fingerprint=fingerprint,
+        taken_at=taken_at,
+        source_type="telegram",
+        source_meta=source_meta,
+    )
+    await data.storage.async_mark_inventory_image_processed(
+        fingerprint,
+        {
+            "fingerprint": fingerprint,
+            "archived_path": dest,
+            "filename": os.path.basename(dest),
+            "size": len(content),
+            "processed_at": dt_util.now().isoformat(),
+            "source": "telegram",
+        },
+    )
+    await data.activity.async_add_activity(
+        kind="inventory_image_imported",
+        description=f"Imported inventory image (Telegram): {row.get('filename')}",
+        payload={"image_id": row.get("image_id"), "filename": row.get("filename"), "source": "telegram"},
+    )
+    hass.async_create_task(_async_run_inventory_vision_for_image(hass, entry, data, row))
+    await data.coordinator.async_refresh()
+    return row.get("image_id"), dest, False
+
+
+def _write_bytes_sync(path: str, content: bytes, now_ts: float) -> None:
+    with open(path, "wb") as f:
+        f.write(content)
+    try:
+        os.utime(path, (now_ts, now_ts))
+    except OSError:
+        pass
+
+
+def _get_telegram_settings(entry: ConfigEntry) -> tuple[str, bool]:
+    token = (entry.options.get(CONF_TELEGRAM_BOT_TOKEN, DEFAULT_TELEGRAM_BOT_TOKEN) or "").strip()
+    enabled = bool(entry.options.get(CONF_TELEGRAM_SEND_FEEDBACK, DEFAULT_TELEGRAM_SEND_FEEDBACK))
+    return token, enabled
+
+
+async def _async_maybe_notify_telegram_receipt(
+    data: GroceryIntelData,
+    *,
+    receipt_id: str,
+    status: str,
+    reason: str | None = None,
+) -> None:
+    hass = data.hass
+    entry = _get_entry(hass)
+    if entry is None:
+        return
+    token, enabled = _get_telegram_settings(entry)
+    if not token or not enabled:
+        return
+
+    receipt = await data.storage.async_get_receipt(receipt_id) or {}
+    if receipt.get("source_type") != "telegram":
+        return
+    meta = receipt.get("source_meta") if isinstance(receipt.get("source_meta"), dict) else {}
+    chat_id = _coerce_int(meta.get("chat_id"))
+    reply_to = _coerce_int(meta.get("message_id"))
+    if chat_id is None:
+        return
+
+    filename = receipt.get("filename") or "receipt"
+    if status == "done":
+        store = receipt.get("store_name") or "Unknown"
+        purchased_at = _format_iso_dt_for_user(hass, receipt.get("purchased_at"))
+        total = receipt.get("total")
+        currency = receipt.get("currency") or entry.options.get(CONF_CURRENCY_SYMBOL, DEFAULT_CURRENCY_SYMBOL) or ""
+        try:
+            items_n = len(receipt.get("line_items_raw") or [])
+        except Exception:
+            items_n = 0
+        try:
+            total_str = f"{float(total):.2f} {currency}".strip() if total is not None else "Unknown total"
+        except Exception:
+            total_str = f"{total} {currency}".strip() if total is not None else "Unknown total"
+        text = (
+            f"Receipt analyzed: {filename}\n"
+            f"- Store: {store}\n"
+            f"- When: {purchased_at}\n"
+            f"- Total: {total_str}\n"
+            f"- Line items: {items_n}"
+        )
+    else:
+        text = f"Receipt failed: {filename}\nReason: {reason or 'unknown'}"
+
+    await _async_telegram_send_message(
+        hass,
+        token=token,
+        chat_id=chat_id,
+        text=text,
+        reply_to_message_id=reply_to,
+    )
+
+
+async def _async_maybe_notify_telegram_inventory_image(
+    data: GroceryIntelData,
+    *,
+    image_row: dict[str, Any],
+    status: str,
+    reason: str | None = None,
+    detected_rows: list[dict[str, Any]] | None = None,
+) -> None:
+    hass = data.hass
+    entry = _get_entry(hass)
+    if entry is None:
+        return
+    token, enabled = _get_telegram_settings(entry)
+    if not token or not enabled:
+        return
+    if image_row.get("source_type") != "telegram":
+        return
+    meta = image_row.get("source_meta") if isinstance(image_row.get("source_meta"), dict) else {}
+    chat_id = _coerce_int(meta.get("chat_id"))
+    reply_to = _coerce_int(meta.get("message_id"))
+    if chat_id is None:
+        return
+
+    filename = image_row.get("filename") or "image"
+    taken_at = _format_iso_dt_for_user(
+        hass, image_row.get("taken_at") or image_row.get("created_at")
+    )
+    if status == "done":
+        items = detected_rows or (image_row.get("detected_products") or [])
+        try:
+            items_n = len(items)
+        except Exception:
+            items_n = 0
+        top = []
+        for row in (items or [])[:5]:
+            label = row.get("label")
+            conf = row.get("confidence")
+            if label:
+                top.append(f"{label} ({conf})")
+        top_str = ", ".join(top) if top else "None"
+        text = (
+            f"Inventory image analyzed: {filename}\n"
+            f"- Taken/imported: {taken_at}\n"
+            f"- Detected items: {items_n}\n"
+            f"- Top: {top_str}"
+        )
+    else:
+        text = f"Inventory image failed: {filename}\nReason: {reason or 'unknown'}"
+
+    await _async_telegram_send_message(
+        hass,
+        token=token,
+        chat_id=chat_id,
+        text=text,
+        reply_to_message_id=reply_to,
+    )
 
 
 async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
@@ -1109,6 +1927,9 @@ async def _async_run_inventory_vision_for_image(
                 payload={"image_id": image_id, "filename": filename, "reason": "read_failed"},
             )
             await data.coordinator.async_refresh()
+            await _async_maybe_notify_telegram_inventory_image(
+                data, image_row=image_row, status="failed", reason="read_failed"
+            )
             return
 
         result = await async_analyze_inventory_image(
@@ -1126,6 +1947,9 @@ async def _async_run_inventory_vision_for_image(
             payload={"image_id": image_id, "filename": filename, "reason": "llm_unavailable_or_failed"},
         )
         await data.coordinator.async_refresh()
+        await _async_maybe_notify_telegram_inventory_image(
+            data, image_row=image_row, status="failed", reason="llm_unavailable_or_failed"
+        )
         return
 
     items = normalize_items_with_confidence_from_llm_result(result)
@@ -1202,6 +2026,9 @@ async def _async_run_inventory_vision_for_image(
         },
     )
     await data.coordinator.async_refresh()
+    await _async_maybe_notify_telegram_inventory_image(
+        data, image_row=image_row, status="done", detected_rows=detected_rows
+    )
 
 
 async def _async_run_ocr_for_receipt(
@@ -1268,6 +2095,7 @@ async def _async_run_ocr_for_receipt(
             },
         )
         session = async_get_clientsession(hass)
+
         async def _do_ocr_request() -> dict[str, Any]:
             def _read_for_upload(path: str, fname: str) -> tuple[bytes, str]:
                 ext = os.path.splitext(fname)[1].lower()
@@ -1280,14 +2108,17 @@ async def _async_run_ocr_for_receipt(
                         converted, filename=fname
                     ) or converted
                     return processed, f"{base}.jpg"
-                if ext in {".jpg", ".jpeg", ".png"}:
+                if ext in {".jpg", ".jpeg", ".png", ".webp"}:
                     try:
                         with open(path, "rb") as f:
                             raw = f.read()
                     except Exception:
                         return b"", fname
-                    processed = _preprocess_receipt_image_bytes_sync(raw, filename=fname) or raw
-                    return processed, fname
+                    processed = _preprocess_receipt_image_bytes_sync(raw, filename=fname)
+                    if processed:
+                        base = os.path.splitext(fname)[0]
+                        return processed, f"{base}.jpg"
+                    return raw, fname
                 with open(path, "rb") as f:
                     return f.read(), fname
 
@@ -1302,7 +2133,7 @@ async def _async_run_ocr_for_receipt(
             # If we've preprocessed, it's always JPEG bytes.
             upload_ext = os.path.splitext(upload_filename)[1].lower()
             if upload_ext in {".jpg", ".jpeg"} and orig_ext in (
-                HEIC_EXTENSIONS | {".jpg", ".jpeg", ".png"}
+                HEIC_EXTENSIONS | {".jpg", ".jpeg", ".png", ".webp"}
             ):
                 content_type = "image/jpeg"
                 if not upload_filename.lower().endswith((".jpg", ".jpeg")):
@@ -1332,7 +2163,7 @@ async def _async_run_ocr_for_receipt(
             # run a lightweight second OCR pass on the cropped header region and
             # prepend it so store/date extraction has better context.
             if content_type == "image/jpeg" and orig_ext in (
-                HEIC_EXTENSIONS | {".jpg", ".jpeg", ".png"}
+                HEIC_EXTENSIONS | {".jpg", ".jpeg", ".png", ".webp"}
             ):
                 try:
                     full_text = payload.get("text") if isinstance(payload, dict) else ""
@@ -1412,7 +2243,7 @@ async def _async_run_ocr_for_receipt(
     ext = os.path.splitext(receipt.get("filename") or os.path.basename(file_path))[1].lower()
     if (
         extractor_mode == "hybrid"
-        and ext in {".jpg", ".jpeg", ".png", ".heic", ".heif"}
+        and ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
         and _ocr_text_looks_low_quality(text)
     ):
         llm_provider = (entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or "").strip()
@@ -1511,6 +2342,7 @@ async def _async_run_ocr_for_receipt(
 
     # Receipt status changed to "done", so refresh analytics (includes processing counts).
     await data.coordinator.async_refresh()
+    await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
 
 
 async def _async_run_llm_for_receipt_file(
@@ -1870,6 +2702,7 @@ async def _async_run_llm_for_receipt_file(
                     if "line_items_raw" in updates:
                         await data.storage.async_reprocess_receipts(receipt_id, 1)
                     await data.coordinator.async_refresh()
+                    await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
                     return
 
                 duration_ms = int((time.perf_counter() - t0) * 1000)
@@ -1926,9 +2759,10 @@ async def _async_run_llm_for_receipt_file(
                     payload={"receipt_id": receipt_id, "filename": filename},
                 )
                 await data.coordinator.async_refresh()
+                await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
                 return
 
-            elif ext in {".jpg", ".jpeg", ".png", ".heic", ".heif"}:
+            elif ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}:
                 llm_provider = entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or ""
                 llm_model = entry.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL) or ""
                 llm_base_url = entry.options.get(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL) or ""
@@ -1942,7 +2776,9 @@ async def _async_run_llm_for_receipt_file(
                     await _async_mark_extract_failed(data, receipt, "LLM model not configured")
                     return
 
-                img_b64 = await hass.async_add_executor_job(_read_file_base64_sync, file_path)
+                img_b64, img_mime = await hass.async_add_executor_job(
+                    _read_receipt_image_base64_and_mime_sync, file_path
+                )
                 if not img_b64:
                     await _async_mark_extract_failed(data, receipt, "Failed to read receipt image")
                     return
@@ -1970,7 +2806,7 @@ async def _async_run_llm_for_receipt_file(
                         model=llm_model,
                         filename=filename,
                         image_b64=img_b64,
-                        image_mime="image/jpeg",
+                        image_mime=img_mime,
                         system_prompt=_llm_system_prompt(str(llm_extra)),
                     )
                 else:
@@ -2053,7 +2889,7 @@ async def _async_run_llm_for_receipt_file(
                             model=llm_model,
                             filename=filename,
                             image_b64=img_b64,
-                            image_mime="image/jpeg",
+                            image_mime=img_mime,
                             system_prompt=_llm_line_items_only_system_prompt(str(llm_extra)),
                         )
                     if isinstance(items_only, dict) and "line_items" in items_only:
@@ -2152,6 +2988,17 @@ async def _async_run_llm_for_receipt_file(
                 if "line_items_raw" in updates:
                     await data.storage.async_reprocess_receipts(receipt_id, 1)
                 await data.coordinator.async_refresh()
+                if updates.get("extract_status") == "done":
+                    await _async_maybe_notify_telegram_receipt(
+                        data, receipt_id=receipt_id, status="done"
+                    )
+                else:
+                    await _async_maybe_notify_telegram_receipt(
+                        data,
+                        receipt_id=receipt_id,
+                        status="failed",
+                        reason="LLM returned no usable fields",
+                    )
                 return
 
             else:
@@ -2162,26 +3009,52 @@ async def _async_run_llm_for_receipt_file(
             await _async_mark_extract_failed(data, receipt, "LLM file parse failed")
 
 
-def _read_file_base64_sync(path: str) -> str:
+def _read_receipt_image_base64_and_mime_sync(path: str) -> tuple[str, str]:
+    """Read an image for receipt vision extraction.
+
+    Returns (base64, mime). Preprocessing is best-effort; if preprocessing
+    succeeds we return JPEG bytes + `image/jpeg`. Otherwise we return the
+    original bytes + a mime inferred from filename.
+    """
     ext = os.path.splitext(path)[1].lower()
-    if ext in HEIC_EXTENSIONS or ext in {".jpg", ".jpeg", ".png"}:
-        if ext in HEIC_EXTENSIONS:
-            raw = _convert_heic_to_jpeg_bytes_sync(path)
+    if ext in HEIC_EXTENSIONS:
+        raw = _convert_heic_to_jpeg_bytes_sync(path)
+        base_mime = "image/jpeg"
+    else:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except Exception:
+            raw = b""
+        if ext in {".png"}:
+            base_mime = "image/png"
+        elif ext in {".webp"}:
+            base_mime = "image/webp"
         else:
-            try:
-                with open(path, "rb") as f:
-                    raw = f.read()
-            except Exception:
-                raw = b""
-        if not raw:
-            return ""
-        processed = _preprocess_receipt_image_bytes_sync(raw, filename=os.path.basename(path))
-        # Preprocessing is best-effort; fall back to raw bytes (e.g., when Pillow isn't installed).
-        if not processed:
-            processed = raw
-        return base64.b64encode(processed).decode("ascii")
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("ascii")
+            base_mime = "image/jpeg"
+
+    if not raw:
+        return "", "image/jpeg"
+
+    processed = _preprocess_receipt_image_bytes_sync(raw, filename=os.path.basename(path))
+    if processed:
+        return base64.b64encode(processed).decode("ascii"), "image/jpeg"
+
+    return base64.b64encode(raw).decode("ascii"), base_mime
+
+
+def _read_file_base64_sync(path: str) -> str:
+    """Legacy helper: base64-encode file for LLM/OCR transport."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}:
+        b64, _mime = _read_receipt_image_base64_and_mime_sync(path)
+        if b64:
+            return b64
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except Exception:
+        return ""
 
 
 
@@ -2253,36 +3126,9 @@ def _preprocess_receipt_image_bytes_sync(content: bytes, *, filename: str) -> by
     except Exception:
         return b""
 
-
-def _crop_receipt_header_jpeg_bytes_sync(jpeg_bytes: bytes) -> bytes:
-    """Crop the top header region of a receipt photo for improved store detection."""
-    if not jpeg_bytes:
-        return b""
     try:
-        from PIL import Image  # type: ignore
-    except Exception:
-        return b""
-
-    import io
-
-    try:
-        img = Image.open(io.BytesIO(jpeg_bytes))
+        img = Image.open(io.BytesIO(content))
         img.load()
-    except Exception:
-        return b""
-
-    try:
-        w, h = img.size
-        if w <= 0 or h <= 0:
-            return b""
-        # Keep a generous top slice so we don't crop away logos.
-        header_h = max(1, int(h * 0.28))
-        crop = img.crop((0, 0, w, header_h))
-        out = io.BytesIO()
-        if crop.mode != "RGB":
-            crop = crop.convert("RGB")
-        crop.save(out, format="JPEG", quality=88, optimize=True)
-        return out.getvalue()
     except Exception:
         return b""
 
@@ -2343,6 +3189,39 @@ def _crop_receipt_header_jpeg_bytes_sync(jpeg_bytes: bytes) -> bytes:
         if img.mode != "RGB":
             img = img.convert("RGB")
         img.save(out, format="JPEG", quality=88, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return b""
+
+
+def _crop_receipt_header_jpeg_bytes_sync(jpeg_bytes: bytes) -> bytes:
+    """Crop the top header region of a receipt photo for improved store detection."""
+    if not jpeg_bytes:
+        return b""
+    try:
+        from PIL import Image  # type: ignore
+    except Exception:
+        return b""
+
+    import io
+
+    try:
+        img = Image.open(io.BytesIO(jpeg_bytes))
+        img.load()
+    except Exception:
+        return b""
+
+    try:
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            return b""
+        # Keep a generous top slice so we don't crop away logos.
+        header_h = max(1, int(h * 0.28))
+        crop = img.crop((0, 0, w, header_h))
+        out = io.BytesIO()
+        if crop.mode != "RGB":
+            crop = crop.convert("RGB")
+        crop.save(out, format="JPEG", quality=88, optimize=True)
         return out.getvalue()
     except Exception:
         return b""
@@ -2500,6 +3379,9 @@ async def _async_mark_extract_failed(
 
     # Receipt status changed to "failed", so refresh analytics (includes processing counts).
     await data.coordinator.async_refresh()
+    await _async_maybe_notify_telegram_receipt(
+        data, receipt_id=receipt_id, status="failed", reason=reason
+    )
 
 
 def _safe_str(value: Any) -> str | None:

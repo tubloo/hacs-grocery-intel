@@ -223,3 +223,49 @@ reset_stuck_receipts:
           max: 1440
           mode: box
           step: 1
+
+telegram_ingest:
+  name: Telegram ingest
+  description: Ingest a Telegram attachment into Grocery Intel (receipt or inventory image), optionally auto-detecting type and sending feedback.
+  fields:
+    chat_id:
+      name: Chat ID
+      description: Telegram chat ID to reply to (must be allowlisted in options).
+      required: true
+      selector:
+        text:
+    file_id:
+      name: File ID
+      description: Telegram file_id for the attachment (from Home Assistant telegram event payload).
+      required: true
+      selector:
+        text:
+    message_id:
+      name: Message ID
+      description: Telegram message_id to reply to (optional).
+      required: false
+      selector:
+        text:
+    filename:
+      name: Filename
+      description: Override filename when saving (optional).
+      required: false
+      selector:
+        text:
+    caption:
+      name: Caption
+      description: Caption text (used for auto-detect keywords like receipt/inventory, fridge/pantry).
+      required: false
+      selector:
+        text:
+    kind:
+      name: Kind
+      description: Set explicitly to receipt or inventory, or use auto to classify.
+      required: false
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - receipt
+            - inventory

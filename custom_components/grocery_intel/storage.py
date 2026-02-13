@@ -86,6 +86,7 @@ class ReceiptStorage:
             for receipt in self._data["receipts"].values():
                 receipt.setdefault("ocr_text", None)
                 receipt.setdefault("ocr_confidence", None)
+                receipt.setdefault("source_meta", {})
 
                 if "extract_status" not in receipt:
                     receipt["extract_status"] = "pending" if receipt.get("file_path") else "done"
@@ -107,6 +108,8 @@ class ReceiptStorage:
 
             for row in (self._data.get("inventory_images", {}) or {}).values():
                 row.setdefault("taken_at", None)
+                row.setdefault("source_type", None)
+                row.setdefault("source_meta", {})
 
     async def async_save(self) -> None:
         await self._store.async_save(self._data)
@@ -166,6 +169,7 @@ class ReceiptStorage:
             "extract_provider": None,
             "extract_model": None,
             "content_hash": None,
+            "source_meta": {},
             "created_at": created_at,
             "line_items_raw": line_items or [],
             "source_type": source_type,
@@ -325,6 +329,8 @@ class ReceiptStorage:
         filename: str,
         fingerprint: str,
         taken_at: str | None = None,
+        source_type: str | None = None,
+        source_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         image_id = uuid.uuid4().hex
         now = dt_util.now().isoformat()
@@ -334,6 +340,8 @@ class ReceiptStorage:
             "filename": filename,
             "fingerprint": fingerprint,
             "taken_at": taken_at,
+            "source_type": source_type,
+            "source_meta": source_meta or {},
             "status": "pending",
             "attempts": 0,
             "created_at": now,

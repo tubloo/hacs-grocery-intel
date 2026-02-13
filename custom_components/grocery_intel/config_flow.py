@@ -39,6 +39,10 @@ from .const import (
     CONF_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
     CONF_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
     CONF_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
+    CONF_TELEGRAM_BOT_TOKEN,
+    CONF_TELEGRAM_ALLOWED_CHAT_IDS,
+    CONF_TELEGRAM_AUTO_DETECT,
+    CONF_TELEGRAM_SEND_FEEDBACK,
     DEFAULT_CURRENCY_SYMBOL,
     DEFAULT_OVERPAID_PCT_THRESHOLD,
     DEFAULT_BASELINE_WINDOW_N,
@@ -70,6 +74,10 @@ from .const import (
     DEFAULT_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
     DEFAULT_INVENTORY_IMAGES_SCAN_INTERVAL_SEC,
     DEFAULT_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
+    DEFAULT_TELEGRAM_BOT_TOKEN,
+    DEFAULT_TELEGRAM_ALLOWED_CHAT_IDS,
+    DEFAULT_TELEGRAM_AUTO_DETECT,
+    DEFAULT_TELEGRAM_SEND_FEEDBACK,
 )
 
 
@@ -502,5 +510,38 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 unit_of_measurement="d",
             )
         )
+
+        fields[
+            vol.Optional(
+                CONF_TELEGRAM_BOT_TOKEN,
+                default=self._opt_default(CONF_TELEGRAM_BOT_TOKEN, DEFAULT_TELEGRAM_BOT_TOKEN),
+            )
+        ] = selector.TextSelector(selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD))
+
+        fields[
+            vol.Optional(
+                CONF_TELEGRAM_ALLOWED_CHAT_IDS,
+                default=self._opt_default(
+                    CONF_TELEGRAM_ALLOWED_CHAT_IDS,
+                    DEFAULT_TELEGRAM_ALLOWED_CHAT_IDS,
+                ),
+            )
+        ] = str
+
+        fields[
+            vol.Optional(
+                CONF_TELEGRAM_AUTO_DETECT,
+                default=self._opt_default(CONF_TELEGRAM_AUTO_DETECT, DEFAULT_TELEGRAM_AUTO_DETECT),
+            )
+        ] = selector.BooleanSelector()
+
+        fields[
+            vol.Optional(
+                CONF_TELEGRAM_SEND_FEEDBACK,
+                default=self._opt_default(
+                    CONF_TELEGRAM_SEND_FEEDBACK, DEFAULT_TELEGRAM_SEND_FEEDBACK
+                ),
+            )
+        ] = selector.BooleanSelector()
 
         return vol.Schema(fields)

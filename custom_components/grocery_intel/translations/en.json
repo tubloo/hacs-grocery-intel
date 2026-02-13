@@ -53,7 +53,11 @@
           "inventory_images_archive_path": "Inventory images archive path",
           "inventory_images_archive_ttl_days": "Inventory image retention (days)",
           "inventory_images_scan_interval_sec": "Inventory image scan interval (30–3600s)",
-          "inventory_images_evidence_ttl_days": "Inventory evidence TTL (days)"
+          "inventory_images_evidence_ttl_days": "Inventory evidence TTL (days)",
+          "telegram_bot_token": "Telegram bot token (optional)",
+          "telegram_allowed_chat_ids": "Telegram allowed chat IDs (comma-separated)",
+          "telegram_auto_detect": "Telegram auto-detect receipt vs inventory",
+          "telegram_send_feedback": "Telegram send analysis feedback"
         }
       }
     }

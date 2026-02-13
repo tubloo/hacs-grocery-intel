@@ -90,6 +90,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `grocery_intel.scan_inventory_images_inbox`
 - `grocery_intel.run_inventory_vision`
 - `grocery_intel.reset_stuck_receipts`
+- `grocery_intel.telegram_ingest`
 
 ## Configuration
 - Add the integration via the Home Assistant UI.
@@ -115,9 +116,43 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
   - `Pause auto-add when all people away ≥48h`: optional
 - Inventory images (Options):
   - Upload images to `Inventory images inbox path` (default `/config/www/inventory_images_inbox`)
-  - The integration archives them to `Inventory images archive path` and analyzes them (vision requires `llm_provider=ollama`)
+  - The integration archives them to `Inventory images archive path` and analyzes them (vision requires a vision-capable LLM; supported providers include `ollama` and `openai`)
   - When available, the integration stores `taken_at` (EXIF capture time) for freshness; otherwise it falls back to import time (`created_at`)
   - Evidence boosts inventory (no exact counts) and suppresses auto-add for `Inventory evidence TTL (days)`
+
+### Telegram intake (optional)
+You can ingest receipts and inventory images from Telegram by calling `grocery_intel.telegram_ingest` from a Home Assistant automation triggered by incoming Telegram messages.
+
+- Configure options:
+  - `Telegram bot token`: required (used to download files and send feedback)
+  - `Telegram allowed chat IDs`: recommended for security (comma-separated allowlist)
+  - `Telegram auto-detect receipt vs inventory`: when enabled, PDFs default to receipts; images use caption keywords first (e.g., `receipt`, `inventory`, `fridge`, `pantry`) and may use your configured LLM (OpenAI/Ollama vision) to classify when available
+  - `Telegram send analysis feedback`: replies in Telegram when queued and when analysis completes/fails (timestamps are formatted in Home Assistant local time)
+  - Limits:
+    - Telegram ingests reject files larger than **25 MB** (to avoid large in-memory downloads inside Home Assistant).
+
+#### Example automation (Telegram attachment → Grocery Intel)
+Telegram uploads typically arrive as the `telegram_attachment` event. Use **Developer Tools → Events** to listen for `telegram_attachment` and confirm the exact payload fields in your HA instance, then adapt the templates below if needed.
+
+```yaml
+alias: Grocery Intel - Telegram ingest
+mode: queued
+trigger:
+  - platform: event
+    event_type: telegram_attachment
+action:
+  - service: grocery_intel.telegram_ingest
+    data:
+      chat_id: "{{ trigger.event.data.chat_id }}"
+      message_id: "{{ trigger.event.data.id | default(none) }}"
+      file_id: "{{ trigger.event.data.get('attachment', {}).get('file_id', '') }}"
+      filename: >-
+        {{ trigger.event.data.get('attachment', {}).get('file_name')
+           or trigger.event.data.get('attachment', {}).get('file_unique_id')
+           or '' }}
+      caption: "{{ trigger.event.data.get('caption', '') }}"
+      kind: auto  # or 'receipt' / 'inventory'
+```
 
 ## Dashboard (example)
 Example Lovelace cards (YAML mode):
