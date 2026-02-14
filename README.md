@@ -201,6 +201,9 @@ Example Lovelace cards (YAML mode):
 type: entities
 title: Grocery Intel
 entities:
+  - entity: sensor.grocery_intel_spend_week
+  - entity: sensor.grocery_intel_spend_month
+  - entity: sensor.grocery_intel_spend_ytd
   - entity: sensor.grocery_intel_spend_7d
   - entity: sensor.grocery_intel_spend_30d
   - entity: sensor.grocery_intel_avg_basket_30d
@@ -209,6 +212,8 @@ entities:
   - entity: sensor.grocery_intel_receipt_processing
   - entity: sensor.grocery_intel_top_stores_30d
   - entity: sensor.grocery_intel_recent_receipts
+  - entity: sensor.grocery_intel_recent_activities
+  - entity: sensor.grocery_intel_inventory_recently_seen
   - entity: sensor.grocery_intel_top_price_increases
   - entity: sensor.grocery_intel_overpaid_items
   - entity: sensor.grocery_intel_best_store_by_item
