@@ -64,6 +64,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 ## Entities
 - `sensor.grocery_intel_spend_week`
 - `sensor.grocery_intel_spend_month`
+- `sensor.grocery_intel_spend_ytd`
 - `sensor.grocery_intel_spend_7d`
 - `sensor.grocery_intel_spend_30d`
 - `sensor.grocery_intel_avg_basket_30d`
@@ -76,6 +77,25 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_top_price_increases`
 - `sensor.grocery_intel_overpaid_items`
 - `sensor.grocery_intel_best_store_by_item`
+
+### Sensors explained
+- `sensor.grocery_intel_spend_week`: current ISO-week spend total.
+- `sensor.grocery_intel_spend_month`: current calendar-month spend total.
+- `sensor.grocery_intel_spend_ytd`: calendar year-to-date spend total (based on `purchased_at` in HA local time).
+- `sensor.grocery_intel_spend_7d`: rolling 7-day spend total.
+- `sensor.grocery_intel_spend_30d`: rolling 30-day spend total.
+- `sensor.grocery_intel_avg_basket_30d`: average receipt total over the last 30 days.
+- `sensor.grocery_intel_receipt_count_30d`: receipt count over the last 30 days.
+- `sensor.grocery_intel_receipt_processing`: pipeline health; state is the number of receipts in `pending+queued+running`, and attributes include `status_counts` and `timing` summaries (avg/median/p95 by method/provider).
+
+List-style sensors: the state is a count, and details are in the `items` attribute.
+- `sensor.grocery_intel_top_stores_30d`: top stores by spend (last 30 days, up to 10).
+- `sensor.grocery_intel_recent_receipts`: latest receipts (up to 20: `receipt_id`, `purchased_at`, `store_name`, `total`, `filename`).
+- `sensor.grocery_intel_recent_activities`: recent activity log (up to 25, payload is compacted to fit HA attribute limits).
+- `sensor.grocery_intel_inventory_recently_seen`: inventory evidence from vision (up to 100: `product`, `last_seen_at`, `expires_at`, `confidence`).
+- `sensor.grocery_intel_top_price_increases`: largest increases by median unit price (up to 10; requires line-item observations).
+- `sensor.grocery_intel_overpaid_items`: “overpaid vs baseline” items (up to 10; requires line-item observations).
+- `sensor.grocery_intel_best_store_by_item`: best store for an item by median unit price (up to 10; requires enough history).
 
 ## Services
 - `grocery_intel.add_receipt`

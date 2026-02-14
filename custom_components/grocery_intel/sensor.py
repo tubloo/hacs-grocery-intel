@@ -40,6 +40,7 @@ from .storage import ReceiptStorage
 class GroceryIntelDataSnapshot:
     week_total: float
     month_total: float
+    ytd_total: float
     rolling_7d_total: float
     rolling_30d_total: float
     receipt_count_30d: int
@@ -77,6 +78,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
         activities = await self._activity.async_list_activities()
 
         week_total, month_total = _compute_spend_totals(receipts)
+        ytd_total = _compute_spend_ytd(receipts)
         rolling_7d_total, rolling_30d_total, receipt_count_30d, avg_basket_30d, top_stores_30d = (
             _compute_rolling_stats(receipts)
         )
@@ -132,6 +134,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
         return GroceryIntelDataSnapshot(
             week_total=week_total,
             month_total=month_total,
+            ytd_total=ytd_total,
             rolling_7d_total=rolling_7d_total,
             rolling_30d_total=rolling_30d_total,
             receipt_count_30d=receipt_count_30d,
@@ -181,6 +184,15 @@ async def async_setup_entry(
             device_info,
             currency,
             "month_total",
+        ),
+        GrocerySpendSensor(
+            coordinator,
+            f"{DOMAIN}_spend_ytd",
+            "Spend YTD",
+            "spend_ytd",
+            device_info,
+            currency,
+            "ytd_total",
         ),
         GrocerySpendSensor(
             coordinator,
@@ -454,6 +466,28 @@ def _compute_spend_totals(receipts: list[dict[str, Any]]) -> tuple[float, float]
             month_total += float(receipt.get("total", 0))
 
     return week_total, month_total
+
+
+def _compute_spend_ytd(receipts: list[dict[str, Any]]) -> float:
+    """Calendar-year-to-date spend total (Home Assistant local timezone)."""
+    now = dt_util.as_local(dt_util.now())
+    ytd_total = 0.0
+    for receipt in receipts:
+        dt = _parse_receipt_datetime(receipt.get("purchased_at"))
+        if dt is None:
+            continue
+        local_dt = dt_util.as_local(dt)
+        if local_dt.year != now.year:
+            continue
+        total = receipt.get("total")
+        try:
+            total_f = float(total) if total is not None else None
+        except Exception:
+            total_f = None
+        if total_f is None:
+            continue
+        ytd_total += total_f
+    return ytd_total
 
 
 def _compute_receipt_status_counts(receipts: list[dict[str, Any]]) -> dict[str, int]:

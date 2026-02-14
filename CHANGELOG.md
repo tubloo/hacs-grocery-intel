@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0 (2026-02-14)
+
+- Analytics: new `sensor.grocery_intel_spend_ytd` (calendar year-to-date spend).
+
 ## 0.7.0 (2026-02-14)
 
 - Telegram intake: new `grocery_intel.telegram_ingest` service to ingest receipts/inventory images from Telegram attachments (via automation), with optional auto-detect and Telegram feedback.
