@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.2 (2026-02-14)
+
+- Docs: dashboard YAML example now includes `sensor.grocery_intel_spend_ytd` and other key entities.
+
 ## 1.0.1 (2026-02-14)
 
 - Fix: `scan_receipts_inbox` now creates the receipts inbox folder if it doesn't exist (important for fresh installs using `/media`).
