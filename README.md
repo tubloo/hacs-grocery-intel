@@ -68,7 +68,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_spend_7d`
 - `sensor.grocery_intel_spend_30d`
 - `sensor.grocery_intel_avg_basket_30d`
-- `sensor.grocery_intel_receipt_count_30d`
+- `sensor.grocery_intel_receipt_count_30d` (may appear as `sensor.grocery_intel_receipts_30d` on older installs)
 - `sensor.grocery_intel_receipt_processing`
 - `sensor.grocery_intel_top_stores_30d`
 - `sensor.grocery_intel_recent_receipts`
@@ -85,7 +85,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_spend_7d`: rolling 7-day spend total.
 - `sensor.grocery_intel_spend_30d`: rolling 30-day spend total.
 - `sensor.grocery_intel_avg_basket_30d`: average receipt total over the last 30 days.
-- `sensor.grocery_intel_receipt_count_30d`: receipt count over the last 30 days.
+- `sensor.grocery_intel_receipt_count_30d`: receipt count over the last 30 days (entity_id may be `sensor.grocery_intel_receipts_30d` if it was created before the suggested id changed; use the one shown in your HA Entities list).
 - `sensor.grocery_intel_receipt_processing`: pipeline health; state is the number of receipts in `pending+queued+running`, and attributes include `status_counts` and `timing` summaries (avg/median/p95 by method/provider).
 
 List-style sensors: the state is a count, and details are in the `items` attribute.
@@ -204,6 +204,7 @@ entities:
   - entity: sensor.grocery_intel_spend_7d
   - entity: sensor.grocery_intel_spend_30d
   - entity: sensor.grocery_intel_avg_basket_30d
+  # Receipt count entity_id can be `sensor.grocery_intel_receipt_count_30d` or (older installs) `sensor.grocery_intel_receipts_30d`.
   - entity: sensor.grocery_intel_receipt_count_30d
   - entity: sensor.grocery_intel_receipt_processing
   - entity: sensor.grocery_intel_top_stores_30d

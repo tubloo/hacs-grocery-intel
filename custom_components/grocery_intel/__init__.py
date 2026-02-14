@@ -5073,6 +5073,10 @@ def _scan_inbox_sync(
 ) -> dict[str, list[dict[str, Any]]]:
     imported: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
+    try:
+        os.makedirs(inbox_path, exist_ok=True)
+    except OSError:
+        return {"imported": imported, "duplicates": duplicates}
     if not os.path.isdir(inbox_path):
         return {"imported": imported, "duplicates": duplicates}
 

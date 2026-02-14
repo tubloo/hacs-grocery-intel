@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.1 (2026-02-14)
+
+- Fix: `scan_receipts_inbox` now creates the receipts inbox folder if it doesn't exist (important for fresh installs using `/media`).
+- Docs: clarify that the 30-day receipt count sensor may appear as `sensor.grocery_intel_receipts_30d` on older installs.
+
 ## 1.0.0 (2026-02-14)
 
 - Analytics: new `sensor.grocery_intel_spend_ytd` (calendar year-to-date spend).
