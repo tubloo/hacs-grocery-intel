@@ -18,6 +18,7 @@ from typing import Any
 import mimetypes
 import time
 import hashlib
+import functools
 from urllib.parse import quote_plus
 
 import voluptuous as vol
@@ -36,6 +37,7 @@ from .locale import DEFAULT_MONTH_MAP, LocaleProfile, get_locale_profile
 
 from .activity import ActivityLog
 from .auto_shopping import AUTO_RUN_HOUR_LOCAL, async_run_auto_shopping
+from .export import ExportFilters, build_export_payload, write_export_file
 from .inventory_images import (
     cleanup_inventory_images_archive_sync,
     scan_inventory_images_inbox_sync,
@@ -107,10 +109,13 @@ from .const import (
     DEFAULT_TELEGRAM_ALLOWED_CHAT_IDS,
     DEFAULT_TELEGRAM_AUTO_DETECT,
     DEFAULT_TELEGRAM_SEND_FEEDBACK,
+    CONF_EXPORTS_PATH,
+    DEFAULT_EXPORTS_PATH,
     SERVICE_SCAN_INVENTORY_IMAGES_INBOX,
     SERVICE_RUN_INVENTORY_VISION,
     SERVICE_RESET_STUCK_RECEIPTS,
     SERVICE_TELEGRAM_INGEST,
+    SERVICE_EXPORT_DATA,
 )
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -821,6 +826,112 @@ def _register_services(hass: HomeAssistant) -> None:
                         reply_to_message_id=message_id,
                     )
 
+    async def handle_export_data(call: ServiceCall) -> None:
+        data = _get_data(hass)
+        entry = _get_entry(hass)
+        if data is None or entry is None:
+            return
+
+        scope = str(call.data.get("scope") or "analytics").strip().lower()
+        since = _safe_str(call.data.get("since"))
+        until = _safe_str(call.data.get("until"))
+        include_undated = bool(call.data.get("include_undated", False))
+
+        exports_dir = (entry.options.get(CONF_EXPORTS_PATH, DEFAULT_EXPORTS_PATH) or "").strip()
+        if not exports_dir:
+            exports_dir = DEFAULT_EXPORTS_PATH
+        if not hass.config.is_allowed_path(exports_dir):
+            reason = f"Exports path not allowed by Home Assistant: {exports_dir}"
+            _LOGGER.warning(reason)
+            await data.activity.async_add_activity(
+                kind="export_failed",
+                description="Export failed",
+                payload={"scope": scope, "since": since, "until": until, "reason": reason},
+            )
+            try:
+                from homeassistant.components import persistent_notification
+
+                persistent_notification.async_create(
+                    hass,
+                    title="Grocery Intel export failed",
+                    message=reason,
+                    notification_id="grocery_intel_export_failed",
+                )
+            except Exception:
+                pass
+            return
+
+        filename = _safe_str(call.data.get("filename"))
+        if not filename:
+            ts = dt_util.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"grocery_intel_export_{ts}_{scope}.json"
+        # Ensure filename cannot escape the exports directory.
+        filename = os.path.basename(filename).strip() or "grocery_intel_export.json"
+        if not filename.lower().endswith(".json"):
+            filename += ".json"
+
+        receipts = await data.storage.async_list_receipts()
+        line_items = await data.storage.async_list_line_items()
+        products = await data.storage.async_list_products()
+        observations = await data.storage.async_list_observations()
+        stores = await data.storage.async_list_stores()
+        inventory_images = await data.storage.async_list_inventory_images()
+        activities = await data.activity.async_list_activities() if scope == "full" else None
+
+        filters = ExportFilters(since=since or None, until=until or None, include_undated=include_undated)
+        payload = build_export_payload(
+            hass,
+            scope=scope,
+            filters=filters,
+            receipts=receipts,
+            line_items=line_items,
+            products=products,
+            observations=observations,
+            stores=stores,
+            inventory_images=inventory_images,
+            activities=activities,
+        )
+
+        try:
+            written = await hass.async_add_executor_job(
+                functools.partial(
+                    write_export_file,
+                    hass,
+                    exports_dir=exports_dir,
+                    filename=filename,
+                    payload=payload,
+                )
+            )
+        except Exception as err:
+            _LOGGER.warning("Export failed: %s", err)
+            await data.activity.async_add_activity(
+                kind="export_failed",
+                description="Export failed",
+                payload={"scope": scope, "since": since, "until": until, "reason": str(err)},
+            )
+            return
+
+        await data.activity.async_add_activity(
+            kind="export_created",
+            description=f"Export created: {os.path.basename(written)}",
+            payload={"path": written, "scope": scope, "since": since, "until": until},
+        )
+
+        # Best-effort user feedback.
+        try:
+            from homeassistant.components import persistent_notification
+
+            persistent_notification.async_create(
+                hass,
+                title="Grocery Intel export created",
+                message=f"Export written to: {written}",
+                notification_id="grocery_intel_export_created",
+            )
+        except Exception:
+            pass
+
+        await data.coordinator.async_refresh()
+
     _reg(
         SERVICE_ADD_RECEIPT,
         handle_add_receipt,
@@ -935,6 +1046,20 @@ def _register_services(hass: HomeAssistant) -> None:
         ),
     )
 
+    _reg(
+        SERVICE_EXPORT_DATA,
+        handle_export_data,
+        vol.Schema(
+            {
+                vol.Optional("scope", default="analytics"): cv.string,
+                vol.Optional("since"): cv.string,
+                vol.Optional("until"): cv.string,
+                vol.Optional("include_undated", default=False): cv.boolean,
+                vol.Optional("filename"): cv.string,
+            }
+        ),
+    )
+
 
 def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_ADD_RECEIPT)
@@ -950,6 +1075,7 @@ def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_RUN_INVENTORY_VISION)
     hass.services.async_remove(DOMAIN, SERVICE_RESET_STUCK_RECEIPTS)
     hass.services.async_remove(DOMAIN, SERVICE_TELEGRAM_INGEST)
+    hass.services.async_remove(DOMAIN, SERVICE_EXPORT_DATA)
 
 
 def _get_entry(hass: HomeAssistant) -> ConfigEntry | None:

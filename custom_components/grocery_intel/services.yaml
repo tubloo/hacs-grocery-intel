@@ -269,3 +269,44 @@ telegram_ingest:
             - auto
             - receipt
             - inventory
+
+export_data:
+  name: Export data
+  description: Export analyzed Grocery Intel data to a JSON file (written to the exports folder path).
+  fields:
+    scope:
+      name: Scope
+      description: Export scope. analytics = minimal; debug = includes extraction metadata; full = includes activity log.
+      required: false
+      default: analytics
+      selector:
+        select:
+          options:
+            - analytics
+            - debug
+            - full
+    since:
+      name: Since
+      description: Optional start date/time filter (ISO, or date-only like 2026-01-01) in Home Assistant local time.
+      required: false
+      selector:
+        text:
+    until:
+      name: Until
+      description: Optional end date/time filter (ISO, or date-only like 2026-12-31) in Home Assistant local time.
+      required: false
+      selector:
+        text:
+    include_undated:
+      name: Include undated receipts
+      description: When filtering by since/until, include receipts without a purchased_at.
+      required: false
+      default: false
+      selector:
+        boolean:
+    filename:
+      name: Filename
+      description: Optional filename override (e.g., grocery_intel_export.json). Defaults to a timestamped name.
+      required: false
+      selector:
+        text:

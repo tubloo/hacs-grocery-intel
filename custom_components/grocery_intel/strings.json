@@ -57,7 +57,8 @@
           "telegram_bot_token": "Telegram bot token (optional)",
           "telegram_allowed_chat_ids": "Telegram allowed chat IDs (comma-separated)",
           "telegram_auto_detect": "Telegram auto-detect receipt vs inventory",
-          "telegram_send_feedback": "Telegram send analysis feedback"
+          "telegram_send_feedback": "Telegram send analysis feedback",
+          "exports_path": "Exports folder path"
         }
       }
     }

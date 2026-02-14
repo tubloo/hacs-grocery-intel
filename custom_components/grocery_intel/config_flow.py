@@ -43,6 +43,7 @@ from .const import (
     CONF_TELEGRAM_ALLOWED_CHAT_IDS,
     CONF_TELEGRAM_AUTO_DETECT,
     CONF_TELEGRAM_SEND_FEEDBACK,
+    CONF_EXPORTS_PATH,
     DEFAULT_CURRENCY_SYMBOL,
     DEFAULT_OVERPAID_PCT_THRESHOLD,
     DEFAULT_BASELINE_WINDOW_N,
@@ -78,6 +79,7 @@ from .const import (
     DEFAULT_TELEGRAM_ALLOWED_CHAT_IDS,
     DEFAULT_TELEGRAM_AUTO_DETECT,
     DEFAULT_TELEGRAM_SEND_FEEDBACK,
+    DEFAULT_EXPORTS_PATH,
 )
 
 
@@ -382,6 +384,13 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 unit_of_measurement="s",
             )
         )
+        fields[
+            vol.Optional(
+                CONF_EXPORTS_PATH,
+                default=self._opt_default(CONF_EXPORTS_PATH, DEFAULT_EXPORTS_PATH),
+            )
+        ] = str
+
         fields[
             vol.Optional(
                 CONF_ON_SUCCESS,

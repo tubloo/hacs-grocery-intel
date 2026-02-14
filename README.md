@@ -91,6 +91,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `grocery_intel.run_inventory_vision`
 - `grocery_intel.reset_stuck_receipts`
 - `grocery_intel.telegram_ingest`
+- `grocery_intel.export_data`
 
 ## Configuration
 - Add the integration via the Home Assistant UI.
@@ -104,7 +105,11 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
   - `hybrid`: uses OCR + heuristics first, then LLM to fill missing fields (and attempt line item extraction).
 - Optional: `LLM extra instructions` lets you add fine-tuning instructions; the integration always enforces a JSON-only contract and appends your instructions.
 - Tip (Home Assistant in Docker): `.local` hostnames may not resolve; prefer an IP like `http://192.168.x.x:11434` for `LLM base URL`.
-- Defaults (Options): inbox `/config/www/receipts_inbox`, archive `/config/www/receipts_archive`.
+- Recommended (privacy): use `/media` paths so receipts/photos are protected by Home Assistant authentication.
+  - **Home Assistant OS / Supervised:** `/media` is available by default.
+  - **Home Assistant Container:** you must mount a host folder into the container at `/media` (e.g., in docker-compose: `./media:/media`).
+  - If `/media` isn’t available for your install, you can change the inbox/archive paths in the integration options.
+- Defaults (Options): inbox `/media/grocery_intel/receipts_inbox`, archive `/media/grocery_intel/receipts_archive`.
   - Receipt dedupe is content-based (SHA-256), so re-uploading the same receipt under a different filename will not create duplicates.
   - Already-processed duplicates are archived with a `_duplicate` suffix.
 - Archive retention: archived receipt files are deleted after `Archive retention (days)` (default 30 days, configurable 1–90).
@@ -115,10 +120,25 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
   - `Auto-add confidence threshold`: default 0.75
   - `Pause auto-add when all people away ≥48h`: optional
 - Inventory images (Options):
-  - Upload images to `Inventory images inbox path` (default `/config/www/inventory_images_inbox`)
+  - Upload images to `Inventory images inbox path` (default `/media/grocery_intel/inventory_images_inbox`)
   - The integration archives them to `Inventory images archive path` and analyzes them (vision requires a vision-capable LLM; supported providers include `ollama` and `openai`)
   - When available, the integration stores `taken_at` (EXIF capture time) for freshness; otherwise it falls back to import time (`created_at`)
   - Evidence boosts inventory (no exact counts) and suppresses auto-add for `Inventory evidence TTL (days)`
+  - Exports:
+    - `Exports folder path` (default `/media/grocery_intel/exports`)
+    - Run `grocery_intel.export_data` and download the JSON from the Media browser (Local Media).
+
+### Using exports for further analysis
+The JSON produced by `grocery_intel.export_data` is designed to be portable and easy to analyze outside Home Assistant.
+
+- Reporting tools:
+  - Convert `data.receipts`, `data.line_items`, and `data.observations` to CSV and import into Excel/Google Sheets/Power BI/Tableau.
+  - Keep `product_id` and `store_entity_id` so you can join to `data.products` (canonical names) and `data.stores` (canonical store identities).
+- Data/BI workflows:
+  - Load the JSON into Python (`pandas`), DuckDB, or a notebook to compute YTD/MTD spend, store comparisons, price inflation, and outlier baskets.
+- LLM/chat analysis:
+  - You can upload the exported JSON to a chat tool for ad-hoc questions (e.g., “What are my top stores YTD?”).
+  - Privacy note: exports may contain sensitive information (store locations, purchase timing, item names). Use `scope: analytics` where possible and avoid sharing `debug/full` exports with third parties unless you are comfortable with the data leaving your network.
 
 ### Telegram intake (optional)
 You can ingest receipts and inventory images from Telegram by calling `grocery_intel.telegram_ingest` from a Home Assistant automation triggered by incoming Telegram messages.
