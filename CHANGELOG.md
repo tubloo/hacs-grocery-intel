@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.6 (2026-02-15)
+
+- Fix: prevent duplicate receipts when the same Telegram receipt is ingested as both a PDF and an image (semantic de-dupe after extraction).
+
 ## 1.0.5 (2026-02-15)
 
 - Fix: `grocery_intel.dedupe_stores` dry-run notification now includes projected store counts after orphan deletion.

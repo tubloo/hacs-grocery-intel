@@ -136,6 +136,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - Defaults (Options): inbox `/media/grocery_intel/receipts_inbox`, archive `/media/grocery_intel/receipts_archive`.
   - Receipt dedupe is content-based (SHA-256), so re-uploading the same receipt under a different filename will not create duplicates.
   - Already-processed duplicates are archived with a `_duplicate` suffix.
+  - Telegram semantic dedupe (PDF + image): if the same receipt is ingested as both a PDF and an image with matching date/store/total, the integration will keep one receipt record and remove the duplicate automatically (file remains archived).
 - Store grouping:
   - Receipts are grouped by a canonical `store_entity_id`, derived from extracted merchant hints when available.
   - If your extraction only produces a store name (no merchant IDs/location), Grocery Intel falls back to name-based matching to prevent store duplication. This can group multiple branches under one entity if the receipt lacks branch/location details.

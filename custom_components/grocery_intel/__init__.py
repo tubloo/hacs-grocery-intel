@@ -119,6 +119,186 @@ from .const import (
     SERVICE_DEDUPE_STORES,
 )
 
+
+def _normalize_semantic_store_key(store_name: str | None) -> str:
+    """Normalize a store name for semantic de-duplication comparisons."""
+    if not store_name:
+        return ""
+    text = str(store_name).strip().casefold()
+    text = re.sub(r"\s{2,}", " ", text)
+    return text
+
+
+def _receipt_semantic_signature(receipt: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Return (local_yyyy_mm_dd, store_key, total_2dp) or None if not computable."""
+    dt = receipt.get("purchased_at")
+    parsed = dt_util.parse_datetime(str(dt)) if dt else None
+    if parsed is None:
+        return None
+    local_day = dt_util.as_local(parsed).strftime("%Y-%m-%d")
+    store_key = _normalize_semantic_store_key(receipt.get("store_name"))
+    if not store_key:
+        return None
+    total = receipt.get("total")
+    try:
+        total_f = float(total) if total is not None else None
+    except Exception:
+        total_f = None
+    if total_f is None:
+        return None
+    total_key = f"{total_f:.2f}"
+    return local_day, store_key, total_key
+
+
+def _file_ext(filename: str | None) -> str:
+    return os.path.splitext(str(filename or ""))[1].lower()
+
+
+def _is_pdf_ext(ext: str) -> bool:
+    return ext == ".pdf"
+
+
+def _is_image_ext(ext: str) -> bool:
+    return ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+
+
+async def _async_semantic_dedupe_after_extract(
+    hass: HomeAssistant,
+    *,
+    data: "GroceryIntelData",
+    receipt_id: str,
+) -> dict[str, Any]:
+    """Best-effort semantic de-dupe (image+pdf variants of same receipt).
+
+    Conservative rules:
+    - Only runs for Telegram-ingested receipts (source_type == "telegram").
+    - Requires purchased_at + total + store_name.
+    - Only considers duplicates where one file is a PDF and the other is an image.
+    - Prefers keeping the older receipt_id and merging richer fields into it.
+    """
+    receipt = await data.storage.async_get_receipt(receipt_id) or {}
+    if receipt.get("source_type") != "telegram":
+        return {"did_dedupe": False}
+
+    sig = _receipt_semantic_signature(receipt)
+    if sig is None:
+        return {"did_dedupe": False}
+    local_day, store_key, total_key = sig
+
+    ext_self = _file_ext(receipt.get("filename"))
+    is_self_pdf = _is_pdf_ext(ext_self)
+    is_self_img = _is_image_ext(ext_self)
+    if not (is_self_pdf or is_self_img):
+        return {"did_dedupe": False}
+
+    receipts = await data.storage.async_list_receipts()
+    candidates: list[dict[str, Any]] = []
+    for r in receipts:
+        if not isinstance(r, dict):
+            continue
+        if r.get("id") == receipt_id:
+            continue
+        if r.get("source_type") != "telegram":
+            continue
+        other_sig = _receipt_semantic_signature(r)
+        if other_sig is None:
+            continue
+        d2, store2, total2 = other_sig
+        if d2 != local_day or store2 != store_key or total2 != total_key:
+            continue
+
+        ext2 = _file_ext(r.get("filename"))
+        is2_pdf = _is_pdf_ext(ext2)
+        is2_img = _is_image_ext(ext2)
+        if not ((is_self_pdf and is2_img) or (is_self_img and is2_pdf)):
+            continue
+        candidates.append(r)
+
+    if not candidates:
+        return {"did_dedupe": False}
+
+    def _created_key(r: dict[str, Any]) -> str:
+        return str(r.get("created_at") or "")
+
+    # Keep the oldest receipt to preserve stable IDs; merge fields from the newer one.
+    candidates.sort(key=_created_key)
+    keeper = candidates[0]
+    keep_id = keeper.get("id")
+    if not isinstance(keep_id, str) or not keep_id:
+        return {"did_dedupe": False}
+
+    # If the current receipt isn't the keeper, treat it as duplicate; otherwise pick the next one.
+    if receipt_id == keep_id:
+        dupe = candidates[1] if len(candidates) > 1 else None
+    else:
+        dupe = receipt
+
+    if not isinstance(dupe, dict):
+        return {"did_dedupe": False}
+    dupe_id = dupe.get("id")
+    if not isinstance(dupe_id, str) or not dupe_id or dupe_id == keep_id:
+        return {"did_dedupe": False}
+
+    updates: dict[str, Any] = {}
+    keep_full = await data.storage.async_get_receipt(keep_id) or {}
+
+    def _merge_if_missing(key: str) -> None:
+        if keep_full.get(key) not in (None, "", [], {}):
+            return
+        val = dupe.get(key)
+        if val in (None, "", [], {}):
+            return
+        updates[key] = val
+
+    for key in ("total", "purchased_at", "store_name", "currency", "raw_text", "ocr_text", "ocr_confidence", "merchant_hints", "store_entity_id"):
+        _merge_if_missing(key)
+
+    keep_items = keep_full.get("line_items_raw") or []
+    dupe_items = dupe.get("line_items_raw") or []
+    if isinstance(dupe_items, list) and len(dupe_items) > 0:
+        if not isinstance(keep_items, list) or len(dupe_items) > len(keep_items):
+            updates["line_items_raw"] = dupe_items
+
+    if updates:
+        await data.storage.async_update_receipt(keep_id, updates)
+        if "line_items_raw" in updates:
+            await data.storage.async_reprocess_receipts(keep_id, 1)
+
+    # Delete the duplicate receipt record (file remains archived).
+    deleted = await data.storage.async_delete_receipt(dupe_id)
+    if deleted:
+        await data.activity.async_add_activity(
+            kind="receipt_semantic_duplicate_removed",
+            description="Removed semantic duplicate receipt (PDF/image variant)",
+            payload={
+                "kept_receipt_id": keep_id,
+                "removed_receipt_id": dupe_id,
+                "day": local_day,
+                "store_name": keep_full.get("store_name") or receipt.get("store_name"),
+                "total": total_key,
+                "kept_filename": (keep_full.get("filename") or keeper.get("filename")),
+                "removed_filename": dupe.get("filename"),
+            },
+        )
+        try:
+            from homeassistant.components import persistent_notification
+
+            persistent_notification.async_create(
+                hass,
+                title="Grocery Intel duplicate receipt removed",
+                message=(
+                    f"Removed semantic duplicate receipt (PDF/image variant).\n"
+                    f"Kept: {keep_id} ({(keep_full.get('filename') or keeper.get('filename') or '')})\n"
+                    f"Removed: {dupe_id} ({(dupe.get('filename') or '')})\n"
+                    f"{local_day} — {keep_full.get('store_name') or receipt.get('store_name')} — {total_key}"
+                ),
+                notification_id="grocery_intel_semantic_duplicate_removed",
+            )
+        except Exception:
+            pass
+
+    return {"did_dedupe": bool(deleted), "kept_receipt_id": keep_id, "removed_receipt_id": dupe_id}
+
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 SIGNAL_REFRESH = "grocery_intel_refresh"
@@ -2554,6 +2734,10 @@ async def _async_run_ocr_for_receipt(
         payload={"receipt_id": receipt_id, "filename": receipt.get("filename")},
     )
 
+    # Best-effort: remove semantic duplicates (e.g., same receipt imported as both JPG and PDF).
+    if updates.get("extract_status") == "done":
+        await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
+
     # Receipt status changed to "done", so refresh analytics (includes processing counts).
     await data.coordinator.async_refresh()
     await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
@@ -3201,6 +3385,11 @@ async def _async_run_llm_for_receipt_file(
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
                     await data.storage.async_reprocess_receipts(receipt_id, 1)
+
+                # Best-effort: remove semantic duplicates (e.g., same receipt imported as both JPG and PDF).
+                if updates.get("extract_status") == "done":
+                    await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
+
                 await data.coordinator.async_refresh()
                 if updates.get("extract_status") == "done":
                     await _async_maybe_notify_telegram_receipt(
