@@ -229,3 +229,201 @@ entities:
 ```
 
 The list-style sensors store their details in attributes under `items` (shown in **Developer Tools → States**).
+
+### Dashboard cards (friendlier examples)
+
+These examples are designed to be easy to read in a Lovelace dashboard.
+
+- Markdown cards support HA templates.
+- The spend snapshot example uses the **Mushroom** card set (`custom:mushroom-*`).
+
+#### Spend snapshot (Mushroom)
+
+```yaml
+type: vertical-stack
+cards:
+  - type: custom:mushroom-title-card
+    title: Spend snapshot
+    subtitle: At-a-glance totals
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: custom:mushroom-template-card
+        icon: mdi:calendar-week
+        primary: Week
+        secondary: >-
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_week')|float(0)) }} {{ cur }}
+      - type: custom:mushroom-template-card
+        icon: mdi:calendar-month
+        primary: Month
+        secondary: >-
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_month')|float(0)) }} {{ cur }}
+      - type: custom:mushroom-template-card
+        icon: mdi:calendar-range
+        primary: Last 30 days
+        secondary: >-
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_30d')|float(0)) }} {{ cur }}
+      - type: custom:mushroom-template-card
+        icon: mdi:calendar
+        primary: Year to date
+        secondary: >-
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_ytd')|float(0)) }} {{ cur }}
+```
+
+#### Overpaid items (Markdown)
+
+```yaml
+type: markdown
+title: Overpaid items (recent)
+content: |
+  _Flag “bad buys”: paid well above your baseline._
+  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+    or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+  {% set items = state_attr('sensor.grocery_intel_overpaid_items','items') or [] %}
+  {% if items|length == 0 %}
+  No items.
+  {% else %}
+  {% for it in items[:10] %}
+  {% set d = as_local(as_datetime(it.observed_at)).strftime('%d-%b') if it.observed_at is defined else '' %}
+  {% set paid = it.unit_price | float(0) %}
+  {% set base = it.baseline | float(0) %}
+  {% set diff = (paid - base) %}
+  - {{ it.product }} @ {{ it.store }}: {{ '{:,.2f}'.format(paid) }} {{ cur }} vs {{ '{:,.2f}'.format(base) }} {{ cur }}
+    ({{ '+' if diff >= 0 else '' }}{{ '{:,.2f}'.format(diff) }} {{ cur }}, +{{ (it.overpaid_pct * 100) | round(0) }}%) on {{ d }}
+  {% endfor %}
+  {% endif %}
+```
+
+#### Recent receipts (Markdown, de-duped)
+
+```yaml
+type: markdown
+title: Recent receipts
+content: |
+  _Latest receipts (deduped by day + store + total)._
+  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+    or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+  {% set items = state_attr('sensor.grocery_intel_recent_receipts','items') or [] %}
+  {% if items|length == 0 %}
+  No receipts yet.
+  {% else %}
+  {% set seen = namespace(keys=[]) %}
+  {% set out = namespace(rows=0) %}
+  {% for r in items %}
+  {% if out.rows >= 15 %}{% break %}{% endif %}
+  {% set dt = r.get('purchased_at') %}
+  {% set dkey = as_local(as_datetime(dt)).strftime('%Y-%m-%d') if dt else '' %}
+  {% set d = as_local(as_datetime(dt)).strftime('%d-%b') if dt else '' %}
+  {% set store = (r.get('store_name') or '') %}
+  {% set total = (r.get('total')|float(0)) %}
+  {% set key = dkey ~ '|' ~ store ~ '|' ~ ('%.2f'|format(total)) %}
+  {% if key not in seen.keys %}
+  {% set seen.keys = seen.keys + [key] %}
+  {% set out.rows = out.rows + 1 %}
+  - {{ d }} — {{ store }} — {{ '{:,.2f}'.format(total) }} {{ cur }} ({{ r.get('filename','') }})
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+```
+
+#### Inventory recently seen (Markdown, grouped by day)
+
+```yaml
+type: markdown
+title: Inventory recently seen
+content: |
+  _Grouped by day; confidence shown as percent._
+  {% set items = state_attr('sensor.grocery_intel_inventory_recently_seen','items') or [] %}
+  {% if items|length == 0 %}
+  No recent inventory evidence.
+  {% else %}
+  {% set ns = namespace(days=[]) %}
+  {% for it in items[:50] %}
+  {% set raw = it.get('last_seen_at') %}
+  {% if raw %}
+  {% set day = as_local(as_datetime(raw)).strftime('%d-%b') %}
+  {% if day not in ns.days %}
+  {% set ns.days = ns.days + [day] %}
+  {% endif %}
+  {% endif %}
+  {% endfor %}
+  {% for day in ns.days %}
+  **{{ day }}**
+  {% for it in items[:50] %}
+  {% set raw = it.get('last_seen_at') %}
+  {% if raw and as_local(as_datetime(raw)).strftime('%d-%b') == day %}
+  {% set c = it.get('confidence') %}
+  {% set pct = ((c * 100) | round(0)) if c is number else (c|string) %}
+  - {{ it.get('product','') }} ({{ pct }}%)
+  {% endif %}
+  {% endfor %}
+  {% endfor %}
+  {% endif %}
+```
+
+#### Spend by category (Markdown)
+
+```yaml
+type: markdown
+title: Spend by Category
+content: |
+  _Categories inferred from purchases (last 30d → avg month)._
+  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
+    or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+  {% set items = state_attr('sensor.grocery_intel_top_stores_30d','items') or [] %}
+  {% set factor = 30.4375 / 30 %}
+
+  {% set groceries = ['ica', 'maxi', 'kvantum', 'willys'] %}
+  {% set alc_tob = ['systembolaget', 'tobak', 'tobacco', 'cig', 'cigarette', 'snus'] %}
+  {% set discount_household = ['dollarstore'] %}
+  {% set specialty_food = ['spicenord', 'indiska spice'] %}
+  {% set food_delivery = ['uber eats', 'ubereats', 'wolt', 'foodora', 'doordash', 'deliveroo'] %}
+  {% set dining_out = ['restaurant', 'pizzeria', 'pizza', 'sushi', 'cafe', 'café', 'bar', 'grill', 'thai', 'indian'] %}
+
+  {% set g = namespace(sum=0.0) %}
+  {% set at = namespace(sum=0.0) %}
+  {% set d = namespace(sum=0.0) %}
+  {% set s = namespace(sum=0.0) %}
+  {% set fd = namespace(sum=0.0) %}
+  {% set do = namespace(sum=0.0) %}
+  {% set o = namespace(sum=0.0) %}
+
+  {% for it in items %}
+    {% set name = (it.get('store_name','') | lower) %}
+    {% set amt = (it.get('total',0) | float(0)) %}
+    {% if groceries | select('in', name) | list | length > 0 %}
+      {% set g.sum = g.sum + amt %}
+    {% elif alc_tob | select('in', name) | list | length > 0 %}
+      {% set at.sum = at.sum + amt %}
+    {% elif discount_household | select('in', name) | list | length > 0 %}
+      {% set d.sum = d.sum + amt %}
+    {% elif specialty_food | select('in', name) | list | length > 0 %}
+      {% set s.sum = s.sum + amt %}
+    {% elif food_delivery | select('in', name) | list | length > 0 %}
+      {% set fd.sum = fd.sum + amt %}
+    {% elif dining_out | select('in', name) | list | length > 0 %}
+      {% set do.sum = do.sum + amt %}
+    {% else %}
+      {% set o.sum = o.sum + amt %}
+    {% endif %}
+  {% endfor %}
+
+  | Category | 30d spend | Avg / month |
+  |---|---:|---:|
+  | Groceries | {{ '{:,.2f}'.format(g.sum) }} {{ cur }} | {{ '{:,.2f}'.format(g.sum * factor) }} {{ cur }} |
+  | Alcohol & Tobacco | {{ '{:,.2f}'.format(at.sum) }} {{ cur }} | {{ '{:,.2f}'.format(at.sum * factor) }} {{ cur }} |
+  | Discount / household | {{ '{:,.2f}'.format(d.sum) }} {{ cur }} | {{ '{:,.2f}'.format(d.sum * factor) }} {{ cur }} |
+  | Specialty food | {{ '{:,.2f}'.format(s.sum) }} {{ cur }} | {{ '{:,.2f}'.format(s.sum * factor) }} {{ cur }} |
+  | Food delivery | {{ '{:,.2f}'.format(fd.sum) }} {{ cur }} | {{ '{:,.2f}'.format(fd.sum * factor) }} {{ cur }} |
+  | Dining out | {{ '{:,.2f}'.format(do.sum) }} {{ cur }} | {{ '{:,.2f}'.format(do.sum * factor) }} {{ cur }} |
+  | Other | {{ '{:,.2f}'.format(o.sum) }} {{ cur }} | {{ '{:,.2f}'.format(o.sum * factor) }} {{ cur }} |
+```
