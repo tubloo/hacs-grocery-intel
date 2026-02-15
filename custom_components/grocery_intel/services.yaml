@@ -310,3 +310,44 @@ export_data:
       required: false
       selector:
         text:
+
+dedupe_stores:
+  name: Dedupe stores
+  description: Merge duplicate store entities and update receipts to point to canonical store_entity_id values (dry-run by default).
+  fields:
+    mode:
+      name: Mode
+      description: "Deduplication mode: hybrid (recommended), strict, or chain_only."
+      required: false
+      default: hybrid
+      selector:
+        select:
+          options:
+            - hybrid
+            - strict
+            - chain_only
+    dry_run:
+      name: Dry run
+      description: If enabled, computes what would change but does not write to storage.
+      required: false
+      default: true
+      selector:
+        boolean:
+    delete_orphans:
+      name: Delete orphan stores
+      description: If enabled (and dry_run is false), deletes store rows that are no longer referenced by any receipt after merging.
+      required: false
+      default: false
+      selector:
+        boolean:
+    max_preview:
+      name: Max preview
+      description: Max number of merge mappings to include in the activity/persistent notification preview.
+      required: false
+      default: 20
+      selector:
+        number:
+          min: 0
+          max: 200
+          mode: box
+          step: 1

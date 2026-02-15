@@ -98,5 +98,6 @@ SERVICE_RUN_INVENTORY_VISION = "run_inventory_vision"
 SERVICE_RESET_STUCK_RECEIPTS = "reset_stuck_receipts"
 SERVICE_TELEGRAM_INGEST = "telegram_ingest"
 SERVICE_EXPORT_DATA = "export_data"
+SERVICE_DEDUPE_STORES = "dedupe_stores"
 
 SMALL_OVERPAY_FLOOR = 2.0

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.4 (2026-02-15)
+
+- New: `grocery_intel.dedupe_stores` service to merge duplicate store entities and update receipts (dry-run by default).
+
 ## 1.0.3 (2026-02-15)
 
 - Fix: prevent duplicate store entities when receipts only contain a store name (no merchant hints/location).

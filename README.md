@@ -115,6 +115,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `grocery_intel.reset_stuck_receipts`
 - `grocery_intel.telegram_ingest`
 - `grocery_intel.export_data`
+- `grocery_intel.dedupe_stores` (dry-run by default; merges duplicate store entities and updates receipts)
 
 ## Configuration
 - Add the integration via the Home Assistant UI.
@@ -138,7 +139,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - Store grouping:
   - Receipts are grouped by a canonical `store_entity_id`, derived from extracted merchant hints when available.
   - If your extraction only produces a store name (no merchant IDs/location), Grocery Intel falls back to name-based matching to prevent store duplication. This can group multiple branches under one entity if the receipt lacks branch/location details.
-  - Existing duplicates (from older versions): updating will stop new duplicate store entities from being created. If you want to consolidate historical receipts, re-save the `store_name` for those receipts via `grocery_intel.update_receipt` (even if unchanged) to re-run store matching and update `store_entity_id`.
+  - Existing duplicates (from older versions): updating will stop new duplicate store entities from being created. To consolidate historical receipts, run `grocery_intel.dedupe_stores` (start with `dry_run: true`) or re-save `store_name` via `grocery_intel.update_receipt`.
 - Archive retention: archived receipt files are deleted after `Archive retention (days)` (default 30 days, configurable 1–90).
 - Receipt processing status: see `sensor.grocery_intel_receipt_processing` (includes `status_counts` and `timing` in attributes).
 - Shopping list automation (Options):

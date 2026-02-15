@@ -398,6 +398,239 @@ class ReceiptStorage:
     async def async_list_stores(self) -> list[dict[str, Any]]:
         return list(self._data.get("stores", {}).values())
 
+    async def async_dedupe_stores(
+        self,
+        *,
+        mode: str = "hybrid",
+        dry_run: bool = True,
+        delete_orphans: bool = False,
+        max_preview: int = 20,
+    ) -> dict[str, Any]:
+        """Deduplicate stores by merging store_entity_id references on receipts.
+
+        This updates receipts to point to a canonical store entity and (optionally) deletes
+        orphaned store rows. By default it runs in dry-run mode and returns a summary.
+
+        Modes:
+        - strict: merge only when strong hints match (org/store_id/phone or location).
+        - chain_only: merge everything with the same normalized chain name.
+        - hybrid: merge empty stores by chain name, and non-empty stores using strict rules.
+        """
+        stores: dict[str, Any] = self._data.get("stores", {}) or {}
+        receipts: dict[str, Any] = self._data.get("receipts", {}) or {}
+        if not isinstance(stores, dict) or not stores:
+            return {
+                "mode": mode,
+                "dry_run": dry_run,
+                "delete_orphans": False,
+                "stores_before": 0,
+                "stores_after": 0,
+                "receipts_updated": 0,
+                "store_merges": 0,
+                "preview": [],
+            }
+
+        if mode not in {"hybrid", "strict", "chain_only"}:
+            mode = "hybrid"
+        max_preview = max(0, min(int(max_preview or 0), 200))
+
+        def _norm_digits(value: Any) -> str | None:
+            if value is None:
+                return None
+            digits = "".join(ch for ch in str(value) if ch.isdigit())
+            return digits or None
+
+        def _norm_text(value: Any) -> str | None:
+            if value is None:
+                return None
+            t = re.sub(r"\s{2,}", " ", str(value).strip())
+            return t or None
+
+        def _filled_count(store: dict[str, Any]) -> int:
+            filled = 0
+            for k in (
+                "branch_name",
+                "address",
+                "postal_code",
+                "city",
+                "org_number",
+                "phone",
+                "store_id",
+            ):
+                if _norm_text(store.get(k)):
+                    filled += 1
+            return filled
+
+        def _is_empty(store: dict[str, Any]) -> bool:
+            return _filled_count(store) == 0
+
+        def _receipt_store_counts() -> dict[str, int]:
+            counts: dict[str, int] = {}
+            if not isinstance(receipts, dict):
+                return counts
+            for r in receipts.values():
+                if not isinstance(r, dict):
+                    continue
+                sid = r.get("store_entity_id")
+                if isinstance(sid, str) and sid:
+                    counts[sid] = counts.get(sid, 0) + 1
+            return counts
+
+        receipt_counts = _receipt_store_counts()
+
+        def _canonical_key(store: dict[str, Any]) -> str:
+            chain = _normalize_store_key(store.get("chain_name") or "")
+            return chain or ""
+
+        # Group by normalized chain_name; this is intentionally simple and safe.
+        groups: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        for sid, s in stores.items():
+            if not isinstance(s, dict):
+                continue
+            key = _canonical_key(s)
+            if not key:
+                continue
+            groups.setdefault(key, []).append((str(sid), s))
+
+        def _pick_canonical(items: list[tuple[str, dict[str, Any]]]) -> str:
+            # Prefer richer stores, then the one already referenced by most receipts, then freshest.
+            def _rank(pair: tuple[str, dict[str, Any]]) -> tuple[int, int, str, str]:
+                sid, s = pair
+                return (
+                    _filled_count(s),
+                    receipt_counts.get(sid, 0),
+                    str(s.get("updated_at") or ""),
+                    sid,
+                )
+
+            return sorted(items, key=_rank, reverse=True)[0][0]
+
+        def _location_overlap(a_addr: str, b_addr: str) -> float:
+            a_tokens = {t for t in re.split(r"[^\w]+", a_addr.casefold()) if len(t) >= 3}
+            b_tokens = {t for t in re.split(r"[^\w]+", b_addr.casefold()) if len(t) >= 3}
+            if not a_tokens or not b_tokens:
+                return 0.0
+            return len(a_tokens & b_tokens) / max(1, len(a_tokens))
+
+        def _strict_match(a: dict[str, Any], b: dict[str, Any]) -> bool:
+            a_org = _norm_digits(a.get("org_number"))
+            b_org = _norm_digits(b.get("org_number"))
+            if a_org and b_org and a_org == b_org:
+                return True
+
+            a_store_id = _norm_digits(a.get("store_id"))
+            b_store_id = _norm_digits(b.get("store_id"))
+            if a_store_id and b_store_id and a_store_id == b_store_id:
+                return True
+
+            a_phone = _norm_digits(a.get("phone"))
+            b_phone = _norm_digits(b.get("phone"))
+            if a_phone and b_phone and a_phone == b_phone:
+                return True
+
+            a_postal = _norm_digits(a.get("postal_code"))
+            b_postal = _norm_digits(b.get("postal_code"))
+            a_city = _norm_text(a.get("city"))
+            b_city = _norm_text(b.get("city"))
+            a_addr = _norm_text(a.get("address"))
+            b_addr = _norm_text(b.get("address"))
+
+            # Require at least postal+city to consider a location match; address overlap helps.
+            if a_postal and b_postal and a_postal == b_postal and a_city and b_city:
+                if a_city.casefold() != b_city.casefold():
+                    return False
+                if a_addr and b_addr:
+                    return _location_overlap(a_addr, b_addr) >= 0.4
+                return True
+            return False
+
+        merge_map: dict[str, str] = {}
+        preview: list[dict[str, Any]] = []
+
+        stores_before = len(stores)
+
+        for chain_key, items in groups.items():
+            if len(items) <= 1:
+                continue
+            canonical_id = _pick_canonical(items)
+            canonical_store = stores.get(canonical_id)
+            if not isinstance(canonical_store, dict):
+                continue
+
+            for sid, s in items:
+                if sid == canonical_id:
+                    continue
+                if not isinstance(s, dict):
+                    continue
+
+                can_merge = False
+                if mode == "chain_only":
+                    can_merge = True
+                elif mode == "strict":
+                    can_merge = _strict_match(canonical_store, s)
+                else:  # hybrid
+                    if _is_empty(s):
+                        can_merge = True
+                    else:
+                        can_merge = _strict_match(canonical_store, s)
+
+                if not can_merge:
+                    continue
+
+                merge_map[sid] = canonical_id
+                if len(preview) < max_preview:
+                    preview.append(
+                        {
+                            "from": sid,
+                            "to": canonical_id,
+                            "chain": canonical_store.get("chain_name") or chain_key,
+                            "from_receipts": receipt_counts.get(sid, 0),
+                            "to_receipts": receipt_counts.get(canonical_id, 0),
+                        }
+                                    )
+
+        receipts_updated = 0
+        if merge_map and isinstance(receipts, dict):
+            for r in receipts.values():
+                if not isinstance(r, dict):
+                    continue
+                sid = r.get("store_entity_id")
+                if isinstance(sid, str) and sid in merge_map:
+                    receipts_updated += 1
+                    if not dry_run:
+                        r["store_entity_id"] = merge_map[sid]
+
+        orphan_deleted = 0
+        if (not dry_run) and delete_orphans:
+            referenced: set[str] = set()
+            if isinstance(receipts, dict):
+                for r in receipts.values():
+                    if not isinstance(r, dict):
+                        continue
+                    sid = r.get("store_entity_id")
+                    if isinstance(sid, str) and sid:
+                        referenced.add(sid)
+            for sid in list(stores.keys()):
+                if sid not in referenced:
+                    stores.pop(sid, None)
+                    orphan_deleted += 1
+
+        changed = (not dry_run) and (receipts_updated > 0 or orphan_deleted > 0)
+        if changed:
+            await self.async_save()
+
+        return {
+            "mode": mode,
+            "dry_run": dry_run,
+            "delete_orphans": bool(delete_orphans) if not dry_run else False,
+            "stores_before": stores_before,
+            "stores_after": len(stores) if not dry_run else stores_before,
+            "receipts_updated": receipts_updated,
+            "store_merges": len(merge_map),
+            "orphans_deleted": orphan_deleted,
+            "preview": preview,
+        }
+
     async def async_match_or_create_store(
         self,
         *,

@@ -116,6 +116,7 @@ from .const import (
     SERVICE_RESET_STUCK_RECEIPTS,
     SERVICE_TELEGRAM_INGEST,
     SERVICE_EXPORT_DATA,
+    SERVICE_DEDUPE_STORES,
 )
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -932,6 +933,72 @@ def _register_services(hass: HomeAssistant) -> None:
 
         await data.coordinator.async_refresh()
 
+    async def handle_dedupe_stores(call: ServiceCall) -> None:
+        data = _get_data(hass)
+        if data is None:
+            return
+
+        mode = str(call.data.get("mode") or "hybrid").strip().lower()
+        dry_run = bool(call.data.get("dry_run", True))
+        delete_orphans = bool(call.data.get("delete_orphans", False))
+        max_preview = int(call.data.get("max_preview", 20))
+
+        result = await data.storage.async_dedupe_stores(
+            mode=mode,
+            dry_run=dry_run,
+            delete_orphans=delete_orphans,
+            max_preview=max_preview,
+        )
+
+        title = "Grocery Intel store dedupe (dry run)" if dry_run else "Grocery Intel store dedupe"
+        summary = (
+            f"Mode: {result.get('mode')}\n"
+            f"Stores: {result.get('stores_before')} -> {result.get('stores_after')}\n"
+            f"Merges: {result.get('store_merges')}\n"
+            f"Receipts updated: {result.get('receipts_updated')}\n"
+            f"Orphans deleted: {result.get('orphans_deleted')}\n"
+        )
+
+        preview = result.get("preview") or []
+        if isinstance(preview, list) and preview:
+            summary += "\nPreview:\n"
+            for row in preview[: max_preview or 0]:
+                if not isinstance(row, dict):
+                    continue
+                summary += (
+                    f"- {row.get('from')} -> {row.get('to')} "
+                    f"({row.get('chain')}, from_receipts={row.get('from_receipts')})\n"
+                )
+
+        await data.activity.async_add_activity(
+            kind="stores_deduped" if not dry_run else "stores_dedupe_dry_run",
+            description="Store dedupe completed" if not dry_run else "Store dedupe dry-run computed",
+            payload={
+                "mode": result.get("mode"),
+                "dry_run": bool(dry_run),
+                "stores_before": result.get("stores_before"),
+                "stores_after": result.get("stores_after"),
+                "store_merges": result.get("store_merges"),
+                "receipts_updated": result.get("receipts_updated"),
+                "orphans_deleted": result.get("orphans_deleted"),
+                "preview": preview[: min(len(preview), 20)] if isinstance(preview, list) else [],
+            },
+        )
+
+        try:
+            from homeassistant.components import persistent_notification
+
+            persistent_notification.async_create(
+                hass,
+                title=title,
+                message=summary.strip(),
+                notification_id="grocery_intel_store_dedupe",
+            )
+        except Exception:
+            pass
+
+        await data.coordinator.async_refresh()
+
     _reg(
         SERVICE_ADD_RECEIPT,
         handle_add_receipt,
@@ -1060,6 +1127,19 @@ def _register_services(hass: HomeAssistant) -> None:
         ),
     )
 
+    _reg(
+        SERVICE_DEDUPE_STORES,
+        handle_dedupe_stores,
+        vol.Schema(
+            {
+                vol.Optional("mode", default="hybrid"): vol.In(["hybrid", "strict", "chain_only"]),
+                vol.Optional("dry_run", default=True): cv.boolean,
+                vol.Optional("delete_orphans", default=False): cv.boolean,
+                vol.Optional("max_preview", default=20): vol.All(int, vol.Range(min=0, max=200)),
+            }
+        ),
+    )
+
 
 def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_ADD_RECEIPT)
@@ -1076,6 +1156,7 @@ def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_RESET_STUCK_RECEIPTS)
     hass.services.async_remove(DOMAIN, SERVICE_TELEGRAM_INGEST)
     hass.services.async_remove(DOMAIN, SERVICE_EXPORT_DATA)
+    hass.services.async_remove(DOMAIN, SERVICE_DEDUPE_STORES)
 
 
 def _get_entry(hass: HomeAssistant) -> ConfigEntry | None:
