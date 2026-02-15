@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.5 (2026-02-15)
+
+- Fix: `grocery_intel.dedupe_stores` dry-run notification now includes projected store counts after orphan deletion.
+
 ## 1.0.4 (2026-02-15)
 
 - New: `grocery_intel.dedupe_stores` service to merge duplicate store entities and update receipts (dry-run by default).

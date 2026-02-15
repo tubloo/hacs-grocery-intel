@@ -335,7 +335,7 @@ dedupe_stores:
         boolean:
     delete_orphans:
       name: Delete orphan stores
-      description: If enabled (and dry_run is false), deletes store rows that are no longer referenced by any receipt after merging.
+      description: If enabled, deletes store rows that are no longer referenced by any receipt after merging (in dry_run it reports projected counts).
       required: false
       default: false
       selector:

@@ -600,6 +600,20 @@ class ReceiptStorage:
                     if not dry_run:
                         r["store_entity_id"] = merge_map[sid]
 
+        # Project the referenced set after merges (used for both apply + dry-run reporting).
+        referenced_after: set[str] = set()
+        if isinstance(receipts, dict):
+            for r in receipts.values():
+                if not isinstance(r, dict):
+                    continue
+                sid = r.get("store_entity_id")
+                if not isinstance(sid, str) or not sid:
+                    continue
+                referenced_after.add(merge_map.get(sid, sid))
+
+        stores_after_projected = len([sid for sid in stores.keys() if sid in referenced_after])
+        orphans_deleted_projected = max(0, stores_before - stores_after_projected)
+
         orphan_deleted = 0
         if (not dry_run) and delete_orphans:
             referenced: set[str] = set()
@@ -622,12 +636,23 @@ class ReceiptStorage:
         return {
             "mode": mode,
             "dry_run": dry_run,
-            "delete_orphans": bool(delete_orphans) if not dry_run else False,
+            # In dry-run we don't delete, but we still report projected counts when delete_orphans is requested.
+            "delete_orphans": bool(delete_orphans),
             "stores_before": stores_before,
-            "stores_after": len(stores) if not dry_run else stores_before,
+            "stores_after": (
+                len(stores)
+                if not dry_run
+                else (stores_after_projected if delete_orphans else stores_before)
+            ),
             "receipts_updated": receipts_updated,
             "store_merges": len(merge_map),
-            "orphans_deleted": orphan_deleted,
+            "orphans_deleted": (
+                orphan_deleted
+                if not dry_run
+                else (orphans_deleted_projected if delete_orphans else 0)
+            ),
+            "stores_after_projected": stores_after_projected,
+            "orphans_deleted_projected": orphans_deleted_projected,
             "preview": preview,
         }
 

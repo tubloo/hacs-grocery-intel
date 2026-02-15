@@ -959,6 +959,13 @@ def _register_services(hass: HomeAssistant) -> None:
             f"Orphans deleted: {result.get('orphans_deleted')}\n"
         )
 
+        if dry_run and not delete_orphans:
+            summary += (
+                "\nProjected (with delete_orphans: true):\n"
+                f"Stores: {result.get('stores_before')} -> {result.get('stores_after_projected')}\n"
+                f"Orphans deleted: {result.get('orphans_deleted_projected')}\n"
+            )
+
         preview = result.get("preview") or []
         if isinstance(preview, list) and preview:
             summary += "\nPreview:\n"
