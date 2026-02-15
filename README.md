@@ -53,7 +53,10 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 Grocery Intel stores its richer data in Home Assistant storage (`/config/.storage/grocery_intel.data`). Sensors are summaries over that data.
 
 - Receipts: one row per receipt (source file, `purchased_at`, `total`, `store_name`, `extract_status`, timing fields, optional `content_hash`)
-- Stores: canonical store entities (`store_entity_id`) used to group receipts even when names vary
+- Stores: canonical store entities (`store_entity_id`) used to group receipts even when names vary.
+  - Matching prefers strong merchant hints when available (org/store ID/phone/address/postal/city).
+  - If a receipt only yields a store/chain name (no hints), Grocery Intel reuses an existing matching store entity (by normalized `chain_name`/aliases) to avoid creating many empty duplicates.
+  - Note: if you shop at multiple branches of the same chain and your receipts don’t include location/IDs, those branches may be grouped together until richer hints are available.
 - Line items: raw line items per receipt (when extraction provides them)
 - Products: normalized/canonical products created from line items and inventory-image detections
 - Observations: per-product purchase “events” derived from line items (used for price/pattern analytics)
@@ -132,6 +135,10 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - Defaults (Options): inbox `/media/grocery_intel/receipts_inbox`, archive `/media/grocery_intel/receipts_archive`.
   - Receipt dedupe is content-based (SHA-256), so re-uploading the same receipt under a different filename will not create duplicates.
   - Already-processed duplicates are archived with a `_duplicate` suffix.
+- Store grouping:
+  - Receipts are grouped by a canonical `store_entity_id`, derived from extracted merchant hints when available.
+  - If your extraction only produces a store name (no merchant IDs/location), Grocery Intel falls back to name-based matching to prevent store duplication. This can group multiple branches under one entity if the receipt lacks branch/location details.
+  - Existing duplicates (from older versions): updating will stop new duplicate store entities from being created. If you want to consolidate historical receipts, re-save the `store_name` for those receipts via `grocery_intel.update_receipt` (even if unchanged) to re-run store matching and update `store_entity_id`.
 - Archive retention: archived receipt files are deleted after `Archive retention (days)` (default 30 days, configurable 1–90).
 - Receipt processing status: see `sensor.grocery_intel_receipt_processing` (includes `status_counts` and `timing` in attributes).
 - Shopping list automation (Options):

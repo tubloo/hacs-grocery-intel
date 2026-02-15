@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.3 (2026-02-15)
+
+- Fix: prevent duplicate store entities when receipts only contain a store name (no merchant hints/location).
+- Docs: clarify store matching behavior and how to consolidate older duplicates.
+
 ## 1.0.2 (2026-02-14)
 
 - Docs: dashboard YAML example now includes `sensor.grocery_intel_spend_ytd` and other key entities.

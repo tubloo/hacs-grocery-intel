@@ -519,6 +519,48 @@ class ReceiptStorage:
 
         chain_key = _normalize_store_key(chain_name or "") if chain_name else ""
 
+        # If we have no identifying/location hints, avoid creating a new store entity for every receipt:
+        # fall back to an existing store that matches the chain name (or known aliases).
+        #
+        # This is intentionally conservative: we only do this when there is *no* other data to
+        # disambiguate stores (org/store_id/address/etc). If chain_name is generic (e.g. "Willys")
+        # and there are multiple branches, this still cannot be resolved correctly; however, creating
+        # N duplicate empty store rows is strictly worse, and future receipts with richer hints will
+        # update the chosen entity.
+        if chain_key and not any((org, phone, store_id, address, postal, city)):
+            def _quality(s: dict[str, Any]) -> tuple[int, str]:
+                filled = 0
+                for k in (
+                    "branch_name",
+                    "address",
+                    "postal_code",
+                    "city",
+                    "org_number",
+                    "phone",
+                    "store_id",
+                ):
+                    if _norm_text(s.get(k)):
+                        filled += 1
+                # Prefer the most recently updated entity as a stable tie-breaker.
+                updated = str(s.get("updated_at") or "")
+                return filled, updated
+
+            candidates: list[tuple[str, dict[str, Any]]] = []
+            for sid, s in stores.items():
+                if not isinstance(s, dict):
+                    continue
+                s_chain = _normalize_store_key(s.get("chain_name") or "")
+                s_aliases = [_normalize_store_key(a) for a in (s.get("aliases") or []) if a]
+                if chain_key and (chain_key == s_chain or chain_key in s_aliases):
+                    candidates.append((str(sid), s))
+
+            if candidates:
+                candidates.sort(
+                    key=lambda pair: (_quality(pair[1]), pair[0]),
+                    reverse=True,
+                )
+                return candidates[0][0], True
+
         best_score = 0
         best_id: str | None = None
         best_allow_alias = False
