@@ -427,3 +427,5 @@ content: |
   | Dining out | {{ '{:,.2f}'.format(do.sum) }} {{ cur }} | {{ '{:,.2f}'.format(do.sum * factor) }} {{ cur }} |
   | Other | {{ '{:,.2f}'.format(o.sum) }} {{ cur }} | {{ '{:,.2f}'.format(o.sum * factor) }} {{ cur }} |
 ```
+
+For AI-assisted “vibe coding”, you can paste `AGENTS.md` as the context/prompt input.
