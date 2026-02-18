@@ -142,6 +142,7 @@ class ReceiptStorage:
         source_type: str | None = None,
         file_path: str | None = None,
         filename: str | None = None,
+        save: bool = True,
     ) -> dict[str, Any]:
         receipt_id = uuid.uuid4().hex
         created_at = dt_util.now().isoformat()
@@ -182,7 +183,8 @@ class ReceiptStorage:
         if line_items:
             await self._add_line_items(receipt_id, store, purchased_at, line_items)
 
-        await self.async_save()
+        if save:
+            await self.async_save()
         return receipt
 
     async def async_delete_receipt(self, receipt_id: str) -> bool:
@@ -197,12 +199,15 @@ class ReceiptStorage:
     async def async_get_receipt(self, receipt_id: str) -> dict[str, Any] | None:
         return self._data["receipts"].get(receipt_id)
 
-    async def async_update_receipt(self, receipt_id: str, updates: dict[str, Any]) -> bool:
+    async def async_update_receipt(
+        self, receipt_id: str, updates: dict[str, Any], *, save: bool = True
+    ) -> bool:
         receipt = self._data["receipts"].get(receipt_id)
         if not receipt:
             return False
         receipt.update(updates)
-        await self.async_save()
+        if save:
+            await self.async_save()
         return True
 
     async def async_clear_receipt_ocr(self, receipt_id: str) -> bool:
@@ -297,14 +302,17 @@ class ReceiptStorage:
                 out.add(f"sha256:{ch}")
         return out
 
-    async def async_mark_processed(self, fingerprint: str, record: dict[str, Any]) -> None:
+    async def async_mark_processed(
+        self, fingerprint: str, record: dict[str, Any], *, save: bool = True
+    ) -> None:
         self._data.setdefault("processed_files", {})[fingerprint] = record
         # Best-effort: also index by content_hash when available, so older path-based fingerprints
         # don't cause duplicates if a file is re-uploaded under a new name.
         ch = record.get("content_hash")
         if isinstance(ch, str) and ch:
             self._data.setdefault("processed_files", {})[f"sha256:{ch}"] = record
-        await self.async_save()
+        if save:
+            await self.async_save()
 
     async def async_get_processed_inventory_images(self) -> set[str]:
         return set(self._data.get("inventory_images_processed", {}).keys())
@@ -318,9 +326,12 @@ class ReceiptStorage:
                 out.add(fp)
         return out
 
-    async def async_mark_inventory_image_processed(self, fingerprint: str, record: dict[str, Any]) -> None:
+    async def async_mark_inventory_image_processed(
+        self, fingerprint: str, record: dict[str, Any], *, save: bool = True
+    ) -> None:
         self._data.setdefault("inventory_images_processed", {})[fingerprint] = record
-        await self.async_save()
+        if save:
+            await self.async_save()
 
     async def async_add_inventory_image(
         self,
@@ -331,6 +342,7 @@ class ReceiptStorage:
         taken_at: str | None = None,
         source_type: str | None = None,
         source_meta: dict[str, Any] | None = None,
+        save: bool = True,
     ) -> dict[str, Any]:
         image_id = uuid.uuid4().hex
         now = dt_util.now().isoformat()
@@ -350,7 +362,8 @@ class ReceiptStorage:
             "detected_products": [],
         }
         self._data.setdefault("inventory_images", {})[image_id] = row
-        await self.async_save()
+        if save:
+            await self.async_save()
         return row
 
     async def async_update_inventory_image(self, image_id: str, updates: dict[str, Any]) -> bool:

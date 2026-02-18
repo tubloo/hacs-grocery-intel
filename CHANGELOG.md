@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.7 (2026-02-18)
+
+- Perf: debounce analytics refreshes to avoid repeated recomputation during bursty updates.
+- Perf: batch storage/activity saves during receipts/inventory inbox scans to reduce repeated full-store writes.
+
 ## 1.0.6 (2026-02-15)
 
 - Fix: prevent duplicate receipts when the same Telegram receipt is ingested as both a PDF and an image (semantic de-dupe after extraction).

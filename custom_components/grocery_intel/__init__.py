@@ -29,7 +29,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_change, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
@@ -323,6 +323,30 @@ class GroceryIntelData:
     unsub_scan: callable | None = None
     unsub_auto_shopping: callable | None = None
     unsub_inventory_images_scan: callable | None = None
+    unsub_debounced_refresh: callable | None = None
+
+    def request_refresh(self, *, delay: float = 0.25) -> None:
+        """Debounce coordinator refreshes during bursty updates."""
+        if self.unsub_debounced_refresh:
+            return
+
+        async def _do_refresh(_now) -> None:
+            self.unsub_debounced_refresh = None
+            try:
+                await self.coordinator.async_refresh()
+            except Exception:
+                _LOGGER.exception("Coordinator refresh failed")
+
+        self.unsub_debounced_refresh = async_call_later(
+            self.hass, delay, lambda now: self.hass.async_create_task(_do_refresh(now))
+        )
+
+    def cancel_pending_refresh(self) -> None:
+        if self.unsub_debounced_refresh:
+            try:
+                self.unsub_debounced_refresh()
+            finally:
+                self.unsub_debounced_refresh = None
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -385,7 +409,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 description="Auto-added shopping list items",
                 payload=payload,
             )
-            await data.coordinator.async_refresh()
+            data.request_refresh()
 
     data.unsub_auto_shopping = async_track_time_change(
         hass,
@@ -412,6 +436,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data.unsub_auto_shopping()
         if data and data.unsub_inventory_images_scan:
             data.unsub_inventory_images_scan()
+        if data:
+            data.cancel_pending_refresh()
 
     if unload_ok and not hass.config_entries.async_entries(DOMAIN):
         _unregister_services(hass)
@@ -487,7 +513,7 @@ def _register_services(hass: HomeAssistant) -> None:
             payload={"receipt_id": receipt["id"], "item_count": item_count},
         )
 
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     async def handle_update_receipt(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -583,13 +609,13 @@ def _register_services(hass: HomeAssistant) -> None:
         ):
             await data.storage.async_reprocess_receipts(receipt_id, 1)
 
-        await data.activity.async_add_activity(
-            kind="receipt_updated",
-            description=f"Receipt updated: {receipt.get('filename') or receipt_id}",
-            payload={"receipt_id": receipt_id, "fields": sorted(list(updates.keys()))},
-        )
+            await data.activity.async_add_activity(
+                kind="receipt_updated",
+                description=f"Receipt updated: {receipt.get('filename') or receipt_id}",
+                payload={"receipt_id": receipt_id, "fields": sorted(list(updates.keys()))},
+            )
 
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     async def handle_undo_activity(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -602,7 +628,7 @@ def _register_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("Undo failed for activity_id=%s", activity_id)
             return
 
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     async def handle_reprocess(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -619,7 +645,7 @@ def _register_services(hass: HomeAssistant) -> None:
             payload={"receipt_id": receipt_id, "count": processed},
         )
 
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     async def handle_scan(call: ServiceCall) -> None:
         await _async_scan_receipts_inbox(hass)
@@ -667,7 +693,7 @@ def _register_services(hass: HomeAssistant) -> None:
                     )
                 )
             if queued_any:
-                await data.coordinator.async_refresh()
+                data.request_refresh()
             return
 
         receipt_id = call.data.get("receipt_id")
@@ -697,7 +723,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 queued_any = True
             hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
         if queued_any:
-            await data.coordinator.async_refresh()
+            data.request_refresh()
 
     async def handle_reparse(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -760,7 +786,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 description=f"Re-parsed receipts ({updated})",
                 payload={"receipt_id": receipt_id, "count": updated},
             )
-            await data.coordinator.async_refresh()
+            data.request_refresh()
 
     async def handle_clear_all(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -775,7 +801,7 @@ def _register_services(hass: HomeAssistant) -> None:
 
         await data.storage.async_clear_all_data()
         await data.activity.async_clear_all()
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     async def handle_run_auto_shopping(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -795,7 +821,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 description="Auto-added shopping list items",
                 payload=payload,
             )
-            await data.coordinator.async_refresh()
+            data.request_refresh()
 
     async def handle_scan_inventory_images(call: ServiceCall) -> None:
         await _async_scan_inventory_images_inbox(hass)
@@ -836,7 +862,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 description=f"Reset stuck receipts ({reset})",
                 payload={"count": reset, "older_than_minutes": older_than_minutes},
             )
-            await data.coordinator.async_refresh()
+            data.request_refresh()
 
     async def handle_telegram_ingest(call: ServiceCall) -> None:
         """Ingest a Telegram attachment into receipts or inventory images."""
@@ -1111,7 +1137,7 @@ def _register_services(hass: HomeAssistant) -> None:
         except Exception:
             pass
 
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     async def handle_dedupe_stores(call: ServiceCall) -> None:
         data = _get_data(hass)
@@ -1184,7 +1210,7 @@ def _register_services(hass: HomeAssistant) -> None:
         except Exception:
             pass
 
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     _reg(
         SERVICE_ADD_RECEIPT,
@@ -1777,7 +1803,7 @@ async def _async_ingest_receipt_bytes(
         )
     else:
         hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
-    await data.coordinator.async_refresh()
+    data.request_refresh()
     return receipt["id"], dest, False
 
 
@@ -1844,7 +1870,7 @@ async def _async_ingest_inventory_image_bytes(
         payload={"image_id": row.get("image_id"), "filename": row.get("filename"), "source": "telegram"},
     )
     hass.async_create_task(_async_run_inventory_vision_for_image(hass, entry, data, row))
-    await data.coordinator.async_refresh()
+    data.request_refresh()
     return row.get("image_id"), dest, False
 
 
@@ -2021,6 +2047,8 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
     )
 
     imported = result.get("imported", [])
+    storage_dirty = False
+    activity_dirty = False
     for record in imported:
         receipt = await data.storage.async_add_receipt(
             total=None,
@@ -2032,15 +2060,21 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
             source_type="file_inbox",
             file_path=record["archived_path"],
             filename=record["filename"],
+            save=False,
         )
+        storage_dirty = True
         if record.get("content_hash"):
-            await data.storage.async_update_receipt(receipt["id"], {"content_hash": record.get("content_hash")})
+            # async_add_receipt stores and returns the same dict; update in-place and persist once at the end.
+            receipt["content_hash"] = record.get("content_hash")
         await data.activity.async_add_activity(
             kind="receipt_imported_file",
             description=f"Imported receipt file: {record['filename']}",
             payload={"receipt_id": receipt["id"], "filename": record["filename"]},
+            save=False,
         )
-        await data.storage.async_mark_processed(record["fingerprint"], record)
+        activity_dirty = True
+        await data.storage.async_mark_processed(record["fingerprint"], record, save=False)
+        storage_dirty = True
 
     duplicates = result.get("duplicates", [])
     for record in duplicates:
@@ -2055,10 +2089,16 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
                 "from_path": record["path"],
                 "to_path": record["archived_path"],
             },
+            save=False,
         )
+        activity_dirty = True
 
-    if imported:
-        await data.coordinator.async_refresh()
+    if storage_dirty:
+        await data.storage.async_save()
+    if activity_dirty:
+        await data.activity.async_save()
+    if imported or duplicates:
+        data.request_refresh()
 
     # Best-effort cleanup of old archived files.
     await hass.async_add_executor_job(_cleanup_archive_sync, archive_path, ttl_days)
@@ -2085,7 +2125,7 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
                     )
                 )
         if queued_any:
-            await data.coordinator.async_refresh()
+            data.request_refresh()
         return
 
     endpoint = entry.options.get(CONF_OCR_ENDPOINT_URL, DEFAULT_OCR_ENDPOINT_URL)
@@ -2108,7 +2148,7 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
                 queued_any = True
             hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
     if queued_any:
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
 
 async def _async_scan_inventory_images_inbox(hass: HomeAssistant) -> None:
@@ -2146,6 +2186,8 @@ async def _async_scan_inventory_images_inbox(hass: HomeAssistant) -> None:
     )
 
     added_any = False
+    storage_dirty = False
+    activity_dirty = False
 
     imported = result.get("imported", [])
     for record in imported:
@@ -2157,13 +2199,18 @@ async def _async_scan_inventory_images_inbox(hass: HomeAssistant) -> None:
             filename=str(record.get("filename") or os.path.basename(archived_path)),
             fingerprint=str(record.get("fingerprint") or ""),
             taken_at=record.get("taken_at"),
+            save=False,
         )
+        storage_dirty = True
         await data.activity.async_add_activity(
             kind="inventory_image_imported",
             description=f"Imported inventory image: {row.get('filename')}",
             payload={"image_id": row.get("image_id"), "filename": row.get("filename")},
+            save=False,
         )
-        await data.storage.async_mark_inventory_image_processed(record["fingerprint"], record)
+        activity_dirty = True
+        await data.storage.async_mark_inventory_image_processed(record["fingerprint"], record, save=False)
+        storage_dirty = True
         added_any = True
         hass.async_create_task(_async_run_inventory_vision_for_image(hass, entry, data, row))
 
@@ -2180,11 +2227,17 @@ async def _async_scan_inventory_images_inbox(hass: HomeAssistant) -> None:
                 "from_path": record["path"],
                 "to_path": record["archived_path"],
             },
+            save=False,
         )
+        activity_dirty = True
         added_any = True
 
+    if storage_dirty:
+        await data.storage.async_save()
+    if activity_dirty:
+        await data.activity.async_save()
     if added_any:
-        await data.coordinator.async_refresh()
+        data.request_refresh()
 
     await hass.async_add_executor_job(cleanup_inventory_images_archive_sync, archive_path, ttl_days)
 
@@ -2320,7 +2373,7 @@ async def _async_run_inventory_vision_for_image(
                 description=f"Inventory image analysis failed: {filename}",
                 payload={"image_id": image_id, "filename": filename, "reason": "read_failed"},
             )
-            await data.coordinator.async_refresh()
+            data.request_refresh()
             await _async_maybe_notify_telegram_inventory_image(
                 data, image_row=image_row, status="failed", reason="read_failed"
             )
@@ -2340,7 +2393,7 @@ async def _async_run_inventory_vision_for_image(
             description=f"Inventory image analysis failed: {filename}",
             payload={"image_id": image_id, "filename": filename, "reason": "llm_unavailable_or_failed"},
         )
-        await data.coordinator.async_refresh()
+        data.request_refresh()
         await _async_maybe_notify_telegram_inventory_image(
             data, image_row=image_row, status="failed", reason="llm_unavailable_or_failed"
         )
@@ -2419,7 +2472,7 @@ async def _async_run_inventory_vision_for_image(
             "detected": detected_rows,
         },
     )
-    await data.coordinator.async_refresh()
+    data.request_refresh()
     await _async_maybe_notify_telegram_inventory_image(
         data, image_row=image_row, status="done", detected_rows=detected_rows
     )
@@ -2675,7 +2728,7 @@ async def _async_run_ocr_for_receipt(
                     force=True,
                 )
             )
-            await data.coordinator.async_refresh()
+            data.request_refresh()
             return
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
@@ -2739,7 +2792,7 @@ async def _async_run_ocr_for_receipt(
         await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
 
     # Receipt status changed to "done", so refresh analytics (includes processing counts).
-    await data.coordinator.async_refresh()
+    data.request_refresh()
     await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
 
 
@@ -3099,7 +3152,7 @@ async def _async_run_llm_for_receipt_file(
                     await data.storage.async_update_receipt(receipt_id, updates)
                     if "line_items_raw" in updates:
                         await data.storage.async_reprocess_receipts(receipt_id, 1)
-                    await data.coordinator.async_refresh()
+                    data.request_refresh()
                     await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
                     return
 
@@ -3156,7 +3209,7 @@ async def _async_run_llm_for_receipt_file(
                     description=f"LLM parsed receipt file: {filename}",
                     payload={"receipt_id": receipt_id, "filename": filename},
                 )
-                await data.coordinator.async_refresh()
+                data.request_refresh()
                 await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
                 return
 
@@ -3390,7 +3443,7 @@ async def _async_run_llm_for_receipt_file(
                 if updates.get("extract_status") == "done":
                     await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
 
-                await data.coordinator.async_refresh()
+                data.request_refresh()
                 if updates.get("extract_status") == "done":
                     await _async_maybe_notify_telegram_receipt(
                         data, receipt_id=receipt_id, status="done"
@@ -3781,7 +3834,7 @@ async def _async_mark_extract_failed(
     )
 
     # Receipt status changed to "failed", so refresh analytics (includes processing counts).
-    await data.coordinator.async_refresh()
+    data.request_refresh()
     await _async_maybe_notify_telegram_receipt(
         data, receipt_id=receipt_id, status="failed", reason=reason
     )

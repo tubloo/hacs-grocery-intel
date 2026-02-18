@@ -48,7 +48,7 @@ class ActivityLog:
         await self.async_save()
 
     async def async_add_activity(
-        self, *, kind: str, description: str, payload: dict[str, Any]
+        self, *, kind: str, description: str, payload: dict[str, Any], save: bool = True
     ) -> dict[str, Any]:
         activity = {
             "activity_id": uuid.uuid4().hex,
@@ -58,7 +58,8 @@ class ActivityLog:
             "payload": payload,
         }
         self._data["activities"].append(activity)
-        await self.async_save()
+        if save:
+            await self.async_save()
         return activity
 
     async def async_get_activity(self, activity_id: str) -> dict[str, Any] | None:
