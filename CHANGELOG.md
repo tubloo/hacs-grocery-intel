@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.8 (2026-02-19)
+
+- Fix: prevent analytics/sensor refresh from getting stuck indefinitely after a missed debounced refresh callback.
+- New: `grocery_intel.force_refresh` service to force an immediate refresh when entities appear stale.
+
 ## 1.0.7 (2026-02-18)
 
 - Perf: debounce analytics refreshes to avoid repeated recomputation during bursty updates.

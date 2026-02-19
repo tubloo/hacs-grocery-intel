@@ -114,6 +114,7 @@ from .const import (
     SERVICE_SCAN_INVENTORY_IMAGES_INBOX,
     SERVICE_RUN_INVENTORY_VISION,
     SERVICE_RESET_STUCK_RECEIPTS,
+    SERVICE_FORCE_REFRESH,
     SERVICE_TELEGRAM_INGEST,
     SERVICE_EXPORT_DATA,
     SERVICE_DEDUPE_STORES,
@@ -324,14 +325,26 @@ class GroceryIntelData:
     unsub_auto_shopping: callable | None = None
     unsub_inventory_images_scan: callable | None = None
     unsub_debounced_refresh: callable | None = None
+    debounced_refresh_scheduled_at: float | None = None
 
     def request_refresh(self, *, delay: float = 0.25) -> None:
         """Debounce coordinator refreshes during bursty updates."""
+        # Safety: if a scheduled debounced refresh gets "stuck" (callback never fires),
+        # the integration will stop refreshing indefinitely. Detect and recover.
         if self.unsub_debounced_refresh:
-            return
+            scheduled_at = float(self.debounced_refresh_scheduled_at or 0.0)
+            age_s = (time.time() - scheduled_at) if scheduled_at else 0.0
+            if age_s and age_s > 10.0:
+                _LOGGER.warning(
+                    "Debounced refresh appears stuck (age=%.1fs); cancelling and rescheduling", age_s
+                )
+                self.cancel_pending_refresh()
+            else:
+                return
 
         async def _do_refresh(_now) -> None:
             self.unsub_debounced_refresh = None
+            self.debounced_refresh_scheduled_at = None
             try:
                 await self.coordinator.async_refresh()
             except Exception:
@@ -340,6 +353,7 @@ class GroceryIntelData:
         self.unsub_debounced_refresh = async_call_later(
             self.hass, delay, lambda now: self.hass.async_create_task(_do_refresh(now))
         )
+        self.debounced_refresh_scheduled_at = time.time()
 
     def cancel_pending_refresh(self) -> None:
         if self.unsub_debounced_refresh:
@@ -347,6 +361,7 @@ class GroceryIntelData:
                 self.unsub_debounced_refresh()
             finally:
                 self.unsub_debounced_refresh = None
+                self.debounced_refresh_scheduled_at = None
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -864,6 +879,28 @@ def _register_services(hass: HomeAssistant) -> None:
             )
             data.request_refresh()
 
+    async def handle_force_refresh(call: ServiceCall) -> None:
+        data = _get_data(hass)
+        if data is None:
+            return
+
+        # Cancel any pending debounced refresh and force an immediate coordinator refresh.
+        data.cancel_pending_refresh()
+        try:
+            await data.coordinator.async_refresh()
+            await data.activity.async_add_activity(
+                kind="manual_refresh",
+                description="Manually refreshed Grocery Intel sensors",
+                payload={"source": "service"},
+            )
+        except Exception as err:
+            _LOGGER.warning("Manual refresh failed: %s", err)
+            await data.activity.async_add_activity(
+                kind="manual_refresh_failed",
+                description="Manual refresh failed",
+                payload={"source": "service", "reason": str(err)},
+            )
+
     async def handle_telegram_ingest(call: ServiceCall) -> None:
         """Ingest a Telegram attachment into receipts or inventory images."""
         data = _get_data(hass)
@@ -1311,6 +1348,8 @@ def _register_services(hass: HomeAssistant) -> None:
         vol.Schema({vol.Optional("older_than_minutes", default=30): vol.All(int, vol.Range(min=1, max=1440))}),
     )
 
+    _reg(SERVICE_FORCE_REFRESH, handle_force_refresh, vol.Schema({}))
+
     _reg(
         SERVICE_TELEGRAM_INGEST,
         handle_telegram_ingest,
@@ -1367,6 +1406,7 @@ def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_SCAN_INVENTORY_IMAGES_INBOX)
     hass.services.async_remove(DOMAIN, SERVICE_RUN_INVENTORY_VISION)
     hass.services.async_remove(DOMAIN, SERVICE_RESET_STUCK_RECEIPTS)
+    hass.services.async_remove(DOMAIN, SERVICE_FORCE_REFRESH)
     hass.services.async_remove(DOMAIN, SERVICE_TELEGRAM_INGEST)
     hass.services.async_remove(DOMAIN, SERVICE_EXPORT_DATA)
     hass.services.async_remove(DOMAIN, SERVICE_DEDUPE_STORES)

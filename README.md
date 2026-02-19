@@ -113,9 +113,17 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `grocery_intel.scan_inventory_images_inbox`
 - `grocery_intel.run_inventory_vision`
 - `grocery_intel.reset_stuck_receipts`
+- `grocery_intel.force_refresh` (forces an immediate refresh if sensors appear stale)
 - `grocery_intel.telegram_ingest`
 - `grocery_intel.export_data`
 - `grocery_intel.dedupe_stores` (dry-run by default; merges duplicate store entities and updates receipts)
+
+## Troubleshooting
+
+### Sensors appear stale / missing recent receipts
+If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback says “Receipt analyzed”) but list-style sensors like `sensor.grocery_intel_recent_receipts` don’t update:
+- Call `grocery_intel.force_refresh`, or reload the Grocery Intel integration.
+- If needed, export with `grocery_intel.export_data` to confirm the receipt exists in storage even if sensors haven’t refreshed yet.
 
 ## Configuration
 - Add the integration via the Home Assistant UI.

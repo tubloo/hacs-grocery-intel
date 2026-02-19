@@ -8,6 +8,14 @@ This file is the canonical agent handoff for this repo. Prefer it over any other
 2. For any non-trivial change, skim `README.md` and `custom_components/grocery_intel/services.yaml` for user-facing expectations.
 3. If behavior is unclear, inspect the code rather than guessing (especially prompt strings and service schemas).
 
+## Debug info requests (how to ask users)
+
+When you need debug info from Home Assistant, prefer providing a **ready-to-run** snippet for **Developer Tools → Template** that prints a single JSON blob the user can paste back.
+
+Guidelines:
+- Ask users to redact secrets (tokens/API keys); receipt IDs, filenames, and chat IDs are OK.
+- If the requested info cannot be accessed via templates (e.g., system logs), ask for it separately and narrowly (time window + integration filter).
+
 ## Non-negotiable principles
 
 - **Work with the existing architecture**; do not redesign it.
@@ -88,4 +96,3 @@ This file is the canonical agent handoff for this repo. Prefer it over any other
   - Request confirmation immediately before running any tagging/release commands.
   - Update documentation as needed (at minimum `README.md`, `custom_components/grocery_intel/services.yaml`, and `AGENTS.md`).
   - Provide a crisp summary of what changed (user-facing + developer-facing).
-

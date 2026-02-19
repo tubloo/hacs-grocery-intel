@@ -224,6 +224,10 @@ reset_stuck_receipts:
           mode: box
           step: 1
 
+force_refresh:
+  name: Force refresh
+  description: Force an immediate refresh of Grocery Intel sensors (useful if entities appear stale).
+
 telegram_ingest:
   name: Telegram ingest
   description: Ingest a Telegram attachment into Grocery Intel (receipt or inventory image), optionally auto-detecting type and sending feedback.
