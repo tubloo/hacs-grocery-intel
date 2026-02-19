@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shopping list: auto-added items can include a recommended store suffix (e.g., `Eggs @ Willys`) based on price history, and may rename existing untagged items to include the recommendation.
+
 ## 1.0.8 (2026-02-19)
 
 - Fix: prevent analytics/sensor refresh from getting stuck indefinitely after a missed debounced refresh callback.

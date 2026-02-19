@@ -97,9 +97,12 @@ class ActivityLog:
                 return False
         elif kind == "shopping_list_auto_run":
             try:
-                from .shopping_list_api import async_remove_item
+                from .shopping_list_api import async_get_items, async_remove_item, async_update_item
             except Exception:
                 return False
+
+            items = await async_get_items(self._hass)
+            name_by_id = {str(i.get("id")): i.get("name") for i in (items or [])}
 
             added = list(activity.get("payload", {}).get("added") or [])
             removed = 0
@@ -111,10 +114,32 @@ class ActivityLog:
                 if ok:
                     removed += 1
 
+            renamed = list(activity.get("payload", {}).get("renamed") or [])
+            restored = 0
+            skipped_renames = 0
+            for row in renamed:
+                item_id = row.get("shopping_list_item_id")
+                old_name = row.get("old_name")
+                new_name = row.get("new_name")
+                if not item_id or not old_name or not new_name:
+                    continue
+                current = name_by_id.get(str(item_id))
+                if current is not None and str(current).strip() != str(new_name).strip():
+                    skipped_renames += 1
+                    continue
+                ok = await async_update_item(self._hass, str(item_id), name=str(old_name))
+                if ok:
+                    restored += 1
+
             await self.async_add_activity(
                 kind="shopping_list_undone",
-                description=f"Undid auto shopping list run ({removed} items removed)",
-                payload={"activity_id": activity_id, "removed": removed},
+                description=f"Undid auto shopping list run ({removed} removed, {restored} renamed reverted)",
+                payload={
+                    "activity_id": activity_id,
+                    "removed": removed,
+                    "restored_renames": restored,
+                    "skipped_renames": skipped_renames,
+                },
             )
             return True
         elif kind == "inventory_image_analyzed":

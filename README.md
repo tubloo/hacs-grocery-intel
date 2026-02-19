@@ -40,7 +40,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 - Spend sensors (weekly/monthly) + basic price analytics
 - OCR and/or LLM-based field extraction (configurable)
 - Activity log with undo for supported actions
-- Daily auto-add to Home Assistant Shopping List (optional)
+- Daily auto-add to Home Assistant Shopping List (optional; can tag items like `Eggs @ Willys` when enough store/price history exists)
 - Inventory images (fridge/pantry/cupboard) inbox + vision analysis (optional)
 - Alcohol item normalization (Beer/Wine/Cider/Spirits)
 
