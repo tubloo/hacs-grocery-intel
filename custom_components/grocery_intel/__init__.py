@@ -326,6 +326,7 @@ class GroceryIntelData:
     unsub_inventory_images_scan: callable | None = None
     unsub_debounced_refresh: callable | None = None
     debounced_refresh_scheduled_at: float | None = None
+    unsub_refresh_failsafe: callable | None = None
 
     def request_refresh(self, *, delay: float = 0.25) -> None:
         """Debounce coordinator refreshes during bursty updates."""
@@ -342,9 +343,21 @@ class GroceryIntelData:
             else:
                 return
 
+        # Clear any existing failsafe so we only keep one timer per refresh burst.
+        if self.unsub_refresh_failsafe:
+            try:
+                self.unsub_refresh_failsafe()
+            finally:
+                self.unsub_refresh_failsafe = None
+
         async def _do_refresh(_now) -> None:
             self.unsub_debounced_refresh = None
             self.debounced_refresh_scheduled_at = None
+            if self.unsub_refresh_failsafe:
+                try:
+                    self.unsub_refresh_failsafe()
+                finally:
+                    self.unsub_refresh_failsafe = None
             try:
                 await self.coordinator.async_refresh()
             except Exception:
@@ -355,6 +368,29 @@ class GroceryIntelData:
         )
         self.debounced_refresh_scheduled_at = time.time()
 
+        # Failsafe: if Home Assistant never runs the debounced callback (rare but observed),
+        # ensure we still refresh without requiring another write or a restart.
+        async def _do_failsafe(_now) -> None:
+            self.unsub_refresh_failsafe = None
+            if not self.unsub_debounced_refresh:
+                return
+            scheduled_at = float(self.debounced_refresh_scheduled_at or 0.0)
+            age_s = (time.time() - scheduled_at) if scheduled_at else 0.0
+            if age_s and age_s > 10.0:
+                _LOGGER.warning(
+                    "Debounced refresh callback appears to have been missed (age=%.1fs); forcing refresh",
+                    age_s,
+                )
+                self.cancel_pending_refresh()
+                try:
+                    await self.coordinator.async_refresh()
+                except Exception:
+                    _LOGGER.exception("Coordinator refresh failed (failsafe)")
+
+        self.unsub_refresh_failsafe = async_call_later(
+            self.hass, max(12.0, float(delay) + 12.0), lambda now: self.hass.async_create_task(_do_failsafe(now))
+        )
+
     def cancel_pending_refresh(self) -> None:
         if self.unsub_debounced_refresh:
             try:
@@ -362,6 +398,11 @@ class GroceryIntelData:
             finally:
                 self.unsub_debounced_refresh = None
                 self.debounced_refresh_scheduled_at = None
+        if self.unsub_refresh_failsafe:
+            try:
+                self.unsub_refresh_failsafe()
+            finally:
+                self.unsub_refresh_failsafe = None
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.10 (2026-02-19)
+
+- Fix: ensure sensors refresh even if the debounced refresh callback is missed (failsafe refresh, no restart needed).
+
 ## 1.0.9 (2026-02-19)
 
 - Shopping list: auto-added items can include a recommended store suffix (e.g., `Eggs @ Willys`) based on price history, and may rename existing untagged items to include the recommendation.
