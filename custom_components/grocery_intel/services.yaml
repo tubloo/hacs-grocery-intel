@@ -94,7 +94,7 @@ update_receipt:
 
 undo_activity:
   name: Undo activity
-  description: Undo a previous activity (e.g., receipt add/import or extraction completion/failure).
+  description: Undo a previous activity (e.g., receipt add/import or extraction completion/failure). For auto-shopping runs, this also restores the run's per-product shopping state metadata.
   fields:
     activity_id:
       name: Activity ID
@@ -297,7 +297,7 @@ export_data:
         text:
     until:
       name: Until
-      description: Optional end date/time filter (ISO, or date-only like 2026-12-31) in Home Assistant local time.
+      description: Optional end date/time filter (ISO, or date-only like 2026-12-31) in Home Assistant local time. Date-only values include the full local day.
       required: false
       selector:
         text:

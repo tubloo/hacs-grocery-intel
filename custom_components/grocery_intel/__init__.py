@@ -977,6 +977,10 @@ def _register_services(hass: HomeAssistant) -> None:
         caption = _safe_str(call.data.get("caption"))
         message_id = _coerce_int(call.data.get("message_id"))
         filename_override = _safe_str(call.data.get("filename"))
+        if filename_override:
+            filename_override = _sanitize_archive_filename(
+                filename_override, fallback="telegram_upload"
+            )
 
         send_feedback = bool(
             entry.options.get(CONF_TELEGRAM_SEND_FEEDBACK, DEFAULT_TELEGRAM_SEND_FEEDBACK)
@@ -1023,11 +1027,17 @@ def _register_services(hass: HomeAssistant) -> None:
                 )
             return
 
-        detected_name = filename_override or os.path.basename(str(file_path))
+        detected_name = _sanitize_archive_filename(
+            filename_override or os.path.basename(str(file_path)) or "telegram_upload",
+            fallback="telegram_upload",
+        )
         detected_ext = os.path.splitext(detected_name)[1].lower()
         if not detected_ext:
             detected_ext = _detect_ext_from_bytes(content) or ""
-            detected_name = (detected_name or "telegram_upload") + (detected_ext or "")
+            detected_name = _sanitize_archive_filename(
+                (detected_name or "telegram_upload") + (detected_ext or ""),
+                fallback="telegram_upload",
+            )
 
         auto_detect = bool(entry.options.get(CONF_TELEGRAM_AUTO_DETECT, DEFAULT_TELEGRAM_AUTO_DETECT))
         final_kind = kind
@@ -1818,6 +1828,7 @@ async def _async_ingest_receipt_bytes(
     if not hass.config.is_allowed_path(archive_path):
         raise RuntimeError("Receipts archive path is not allowed")
     os.makedirs(archive_path, exist_ok=True)
+    safe_filename = _sanitize_archive_filename(filename, fallback="receipt_upload")
 
     content_hash = hashlib.sha256(content).hexdigest()
     fingerprint = f"sha256:{content_hash}"
@@ -1826,19 +1837,19 @@ async def _async_ingest_receipt_bytes(
 
     now_ts = time.time()
     if fingerprint in processed:
-        dest = _unique_dest_path(archive_path, filename, suffix="_duplicate")
+        dest = _unique_dest_path(archive_path, safe_filename, suffix="_duplicate")
         await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
         await data.activity.async_add_activity(
             kind="receipt_duplicate_file",
             description=(
                 "Archived duplicate receipt file with suffix: "
-                f"{filename} -> {os.path.basename(dest)}"
+                f"{safe_filename} -> {os.path.basename(dest)}"
             ),
-            payload={"filename": filename, "to_path": dest, "source": "telegram"},
+            payload={"filename": safe_filename, "to_path": dest, "source": "telegram"},
         )
         return None, dest, True
 
-    dest = _unique_dest_path(archive_path, filename)
+    dest = _unique_dest_path(archive_path, safe_filename)
     await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
 
     receipt = await data.storage.async_add_receipt(
@@ -1903,6 +1914,7 @@ async def _async_ingest_inventory_image_bytes(
     if not hass.config.is_allowed_path(archive_path):
         raise RuntimeError("Inventory images archive path is not allowed")
     os.makedirs(archive_path, exist_ok=True)
+    safe_filename = _sanitize_archive_filename(filename, fallback="inventory_upload")
 
     fingerprint = hashlib.sha256(content).hexdigest()
     processed = await data.storage.async_get_processed_inventory_images()
@@ -1910,19 +1922,19 @@ async def _async_ingest_inventory_image_bytes(
 
     now_ts = time.time()
     if fingerprint in processed:
-        dest = _unique_dest_path(archive_path, filename, suffix="_duplicate")
+        dest = _unique_dest_path(archive_path, safe_filename, suffix="_duplicate")
         await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
         await data.activity.async_add_activity(
             kind="inventory_image_duplicate_file",
             description=(
                 "Archived duplicate inventory image with suffix: "
-                f"{filename} -> {os.path.basename(dest)}"
+                f"{safe_filename} -> {os.path.basename(dest)}"
             ),
-            payload={"filename": filename, "to_path": dest, "source": "telegram"},
+            payload={"filename": safe_filename, "to_path": dest, "source": "telegram"},
         )
         return None, dest, True
 
-    dest = _unique_dest_path(archive_path, filename)
+    dest = _unique_dest_path(archive_path, safe_filename)
     await hass.async_add_executor_job(_write_bytes_sync, dest, content, now_ts)
     taken_at = await hass.async_add_executor_job(_inventory_extract_taken_at_iso_sync, dest)
 
@@ -3928,6 +3940,17 @@ def _safe_str(value: Any) -> str | None:
     return text or None
 
 
+def _sanitize_archive_filename(value: str | None, *, fallback: str) -> str:
+    """Return a single safe filename (no path components)."""
+    raw = (value or "").replace("\x00", "").strip()
+    raw = raw.replace("\\", "/")
+    raw = raw.rsplit("/", 1)[-1].strip()
+    raw = re.sub(r"[\x00-\x1f]", "", raw)
+    if not raw or raw in {".", ".."}:
+        raw = fallback
+    return raw[:255]
+
+
 def _ms_between_iso(start_iso: str | None, end_iso: str | None) -> int | None:
     """Return milliseconds between two ISO timestamps, or None if not computable."""
     if not start_iso or not end_iso:
@@ -5593,6 +5616,7 @@ def _cleanup_archive_sync(archive_path: str, ttl_days: int) -> int:
 
 
 def _unique_dest_path(dest_dir: str, filename: str, *, suffix: str = "") -> str:
+    filename = _sanitize_archive_filename(filename, fallback="file")
     base, ext = os.path.splitext(filename)
     candidate = os.path.join(dest_dir, f"{base}{suffix}{ext}")
     if not os.path.exists(candidate):

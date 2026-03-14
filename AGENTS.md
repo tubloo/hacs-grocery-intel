@@ -62,6 +62,7 @@ Guidelines:
   - Cooldown after auto-add: 7 days (default)
   - Confidence threshold: 0.75 (default)
 - Never auto-removes items; undo removes only items added by that run.
+- Undo also restores per-product shopping state updates written by that run (for example `last_auto_added_at` and store-tag metadata).
 
 ### Inventory images (v1)
 

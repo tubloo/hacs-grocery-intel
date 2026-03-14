@@ -457,13 +457,20 @@ def _compute_spend_totals(receipts: list[dict[str, Any]]) -> tuple[float, float]
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
         if dt is None:
             continue
+        total = receipt.get("total")
+        try:
+            total_f = float(total) if total is not None else None
+        except Exception:
+            total_f = None
+        if total_f is None:
+            continue
 
         local_dt = dt_util.as_local(dt)
         if local_dt.isocalendar()[:2] == (iso_year, iso_week):
-            week_total += float(receipt.get("total", 0))
+            week_total += total_f
 
         if (local_dt.year, local_dt.month) == (now.year, now.month):
-            month_total += float(receipt.get("total", 0))
+            month_total += total_f
 
     return week_total, month_total
 

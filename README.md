@@ -40,6 +40,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 - Spend sensors (weekly/monthly) + basic price analytics
 - OCR and/or LLM-based field extraction (configurable)
 - Activity log with undo for supported actions
+  - Undoing an auto-shopping run restores shopping-list edits and the run's per-product auto-add/store-tag state.
 - Daily auto-add to Home Assistant Shopping List (optional; can tag items like `Eggs @ Willys` when enough store/price history exists)
 - Inventory images (fridge/pantry/cupboard) inbox + vision analysis (optional)
 - Alcohol item normalization (Beer/Wine/Cider/Spirits)
@@ -165,9 +166,10 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
   - The integration archives them to `Inventory images archive path` and analyzes them (vision requires a vision-capable LLM; supported providers include `ollama` and `openai`)
   - When available, the integration stores `taken_at` (EXIF capture time) for freshness; otherwise it falls back to import time (`created_at`)
   - Evidence boosts inventory (no exact counts) and suppresses auto-add for `Inventory evidence TTL (days)`
-  - Exports:
+- Exports:
     - `Exports folder path` (default `/media/grocery_intel/exports`)
     - Run `grocery_intel.export_data` and download the JSON from the Media browser (Local Media).
+    - Date-only `until` filters (for example `2026-12-31`) include the full local day.
 
 ### Using exports for further analysis
 The JSON produced by `grocery_intel.export_data` is designed to be portable and easy to analyze outside Home Assistant.

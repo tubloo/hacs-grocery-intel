@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.0.11 (2026-03-14)
+
+- Security/safety: sanitize ingest/archive filenames so Telegram or upload filename overrides cannot inject path components.
+- Undo: `undo_activity` for auto-shopping runs now restores per-product shopping state metadata (`last_auto_added_at`, store-tag fields), not only shopping-list item edits.
+- Sensors: spend totals now skip non-numeric totals safely instead of risking conversion errors.
+- Export: date-only `until` filters now include the full local day (end-of-day semantics).
+
 ## 1.0.10 (2026-02-19)
 
 - Fix: ensure sensors refresh even if the debounced refresh callback is missed (failsafe refresh, no restart needed).

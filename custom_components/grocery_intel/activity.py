@@ -131,14 +131,37 @@ class ActivityLog:
                 if ok:
                     restored += 1
 
+            state_rows = list(activity.get("payload", {}).get("shopping_state_updates") or [])
+            restored_states = 0
+            to_update: dict[str, dict[str, Any]] = {}
+            for row in state_rows:
+                pid = row.get("product_id")
+                if not pid:
+                    continue
+                prev = row.get("previous", {})
+                if not isinstance(prev, dict):
+                    prev = {}
+                to_update[str(pid)] = {
+                    "last_auto_added_at": prev.get("last_auto_added_at"),
+                    "last_store_tag": prev.get("last_store_tag"),
+                    "last_store_tag_confidence": prev.get("last_store_tag_confidence"),
+                }
+            if to_update:
+                await receipt_storage.async_bulk_update_shopping_product_state(to_update)
+                restored_states = len(to_update)
+
             await self.async_add_activity(
                 kind="shopping_list_undone",
-                description=f"Undid auto shopping list run ({removed} removed, {restored} renamed reverted)",
+                description=(
+                    "Undid auto shopping list run "
+                    f"({removed} removed, {restored} renamed reverted, {restored_states} states restored)"
+                ),
                 payload={
                     "activity_id": activity_id,
                     "removed": removed,
                     "restored_renames": restored,
                     "skipped_renames": skipped_renames,
+                    "restored_states": restored_states,
                 },
             )
             return True

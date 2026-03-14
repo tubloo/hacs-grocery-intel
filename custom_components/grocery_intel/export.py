@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 import json
 import os
 from typing import Any
@@ -17,7 +18,7 @@ class ExportFilters:
     include_undated: bool = False
 
 
-def _parse_dt(value: str | None) -> Any:
+def _parse_dt(value: str | None, *, end_of_day: bool = False) -> Any:
     if not value:
         return None
     raw = str(value).strip()
@@ -28,7 +29,10 @@ def _parse_dt(value: str | None) -> Any:
         return dt_util.as_local(dt)
     d = dt_util.parse_date(raw)
     if d is not None:
-        return dt_util.start_of_local_day(d)
+        dt = dt_util.start_of_local_day(d)
+        if end_of_day:
+            return dt + timedelta(days=1) - timedelta(microseconds=1)
+        return dt
     return None
 
 
@@ -74,7 +78,7 @@ def build_export_payload(
         scope = "analytics"
 
     since_dt = _parse_dt(filters.since)
-    until_dt = _parse_dt(filters.until)
+    until_dt = _parse_dt(filters.until, end_of_day=True)
     receipts_out = [
         r
         for r in receipts
@@ -187,4 +191,3 @@ def write_export_file(
         json.dump(payload, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
     return path
-

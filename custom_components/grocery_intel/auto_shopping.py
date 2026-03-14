@@ -523,6 +523,7 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
     added_rows: list[dict[str, Any]] = []
     renamed_rows: list[dict[str, Any]] = []
     state_updates: dict[str, dict[str, Any]] = {}
+    state_changes_by_pid: dict[str, dict[str, Any]] = {}
 
     store_recs: dict[str, dict[str, Any]] = {}
     for cand in candidates:
@@ -599,10 +600,21 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
                 }
             )
             existing_by_base[base_key] = dict(existing_item, name=desired_name)
-            state_updates[cand.product_id] = {
+            updated_state = {
                 "last_auto_added_at": now.isoformat(),
                 "last_store_tag": desired_store,
                 "last_store_tag_confidence": round(store_conf, 3),
+            }
+            state_updates[cand.product_id] = updated_state
+            prev_state = data.storage.get_shopping_product_state(cand.product_id)
+            state_changes_by_pid[cand.product_id] = {
+                "product_id": cand.product_id,
+                "previous": {
+                    "last_auto_added_at": prev_state.get("last_auto_added_at"),
+                    "last_store_tag": prev_state.get("last_store_tag"),
+                    "last_store_tag_confidence": prev_state.get("last_store_tag_confidence"),
+                },
+                "new": dict(updated_state),
             }
             continue
 
@@ -641,10 +653,21 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
                 "shopping_list_item_id": item_id,
             }
         )
-        state_updates[cand.product_id] = {
+        updated_state = {
             "last_auto_added_at": now.isoformat(),
             "last_store_tag": desired_store,
             "last_store_tag_confidence": round(store_conf, 3) if desired_store else None,
+        }
+        state_updates[cand.product_id] = updated_state
+        prev_state = data.storage.get_shopping_product_state(cand.product_id)
+        state_changes_by_pid[cand.product_id] = {
+            "product_id": cand.product_id,
+            "previous": {
+                "last_auto_added_at": prev_state.get("last_auto_added_at"),
+                "last_store_tag": prev_state.get("last_store_tag"),
+                "last_store_tag_confidence": prev_state.get("last_store_tag_confidence"),
+            },
+            "new": dict(updated_state),
         }
 
     if state_updates:
@@ -652,6 +675,7 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
 
     result["added"] = added_rows
     result["renamed"] = renamed_rows
+    result["shopping_state_updates"] = list(state_changes_by_pid.values())
     result["store_plan"] = {
         "stores": plan.get("stores") or [],
         "primary": plan.get("primary"),
