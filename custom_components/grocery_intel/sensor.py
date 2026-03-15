@@ -70,21 +70,53 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
         self._storage = storage
         self._activity = activity
         self._entry = entry
+        self._receipt_metrics_cache_key: tuple[int, str] | None = None
+        self._receipt_metrics_cache: dict[str, Any] | None = None
 
     async def _async_update_data(self) -> GroceryIntelDataSnapshot:
-        receipts = await self._storage.async_list_receipts()
         observations = await self._storage.async_list_observations()
         products = await self._storage.async_list_products()
         activities = await self._activity.async_list_activities()
-
-        week_total, month_total = _compute_spend_totals(receipts)
-        ytd_total = _compute_spend_ytd(receipts)
-        rolling_7d_total, rolling_30d_total, receipt_count_30d, avg_basket_30d, top_stores_30d = (
-            _compute_rolling_stats(receipts)
-        )
-        receipt_status_counts = _compute_receipt_status_counts(receipts)
-        receipt_processing_timing = _compute_receipt_processing_timing(receipts)
-        recent_receipts = _compute_recent_receipts(receipts)
+        receipt_revision = await self._storage.async_get_receipt_revision()
+        hour_bucket = dt_util.as_local(dt_util.now()).strftime("%Y-%m-%d-%H")
+        cache_key = (receipt_revision, hour_bucket)
+        if self._receipt_metrics_cache_key == cache_key and self._receipt_metrics_cache is not None:
+            cached = self._receipt_metrics_cache
+            week_total = float(cached["week_total"])
+            month_total = float(cached["month_total"])
+            ytd_total = float(cached["ytd_total"])
+            rolling_7d_total = float(cached["rolling_7d_total"])
+            rolling_30d_total = float(cached["rolling_30d_total"])
+            receipt_count_30d = int(cached["receipt_count_30d"])
+            avg_basket_30d = float(cached["avg_basket_30d"])
+            top_stores_30d = list(cached["top_stores_30d"])
+            receipt_status_counts = dict(cached["receipt_status_counts"])
+            receipt_processing_timing = dict(cached["receipt_processing_timing"])
+            recent_receipts = list(cached["recent_receipts"])
+        else:
+            receipts = await self._storage.async_list_receipts()
+            week_total, month_total = _compute_spend_totals(receipts)
+            ytd_total = _compute_spend_ytd(receipts)
+            rolling_7d_total, rolling_30d_total, receipt_count_30d, avg_basket_30d, top_stores_30d = (
+                _compute_rolling_stats(receipts)
+            )
+            receipt_status_counts = _compute_receipt_status_counts(receipts)
+            receipt_processing_timing = _compute_receipt_processing_timing(receipts)
+            recent_receipts = _compute_recent_receipts(receipts)
+            self._receipt_metrics_cache_key = cache_key
+            self._receipt_metrics_cache = {
+                "week_total": week_total,
+                "month_total": month_total,
+                "ytd_total": ytd_total,
+                "rolling_7d_total": rolling_7d_total,
+                "rolling_30d_total": rolling_30d_total,
+                "receipt_count_30d": receipt_count_30d,
+                "avg_basket_30d": avg_basket_30d,
+                "top_stores_30d": top_stores_30d,
+                "receipt_status_counts": receipt_status_counts,
+                "receipt_processing_timing": receipt_processing_timing,
+                "recent_receipts": recent_receipts,
+            }
         recent_activities = _compute_recent_activities(activities)
 
         options = self._entry.options

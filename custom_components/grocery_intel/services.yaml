@@ -23,6 +23,15 @@ add_receipt:
       required: false
       selector:
         text:
+    receipt_type:
+      name: Receipt type
+      description: Optional category (`grocery` or `eating_out`). If omitted, Grocery Intel auto-detects.
+      required: false
+      selector:
+        select:
+          options:
+            - grocery
+            - eating_out
     raw_text:
       name: Raw text
       description: Raw receipt text.
@@ -70,6 +79,12 @@ update_receipt:
     currency:
       name: Currency
       description: Currency symbol (e.g. kr, €, $). Set to empty to clear.
+      required: false
+      selector:
+        text:
+    receipt_type:
+      name: Receipt type
+      description: Category (`grocery` or `eating_out`). Set to empty to clear.
       required: false
       selector:
         text:

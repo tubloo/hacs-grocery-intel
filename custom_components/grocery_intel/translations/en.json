@@ -15,13 +15,15 @@
       "ocr_endpoint_required": "OCR endpoint URL is required when extractor mode is set to Heuristic or Hybrid.",
       "llm_provider_required": "LLM provider is required when extractor mode is set to LLM or Hybrid.",
       "llm_model_required": "LLM model is required when extractor mode is set to LLM or Hybrid.",
-      "llm_base_url_required": "LLM base URL is required for Ollama and Azure OpenAI."
+      "llm_base_url_required": "LLM base URL is required for Ollama and Azure OpenAI.",
+      "review_confirm_required": "Enable confirmation to save options."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Options",
+        "description": "Step {wizard_step_current} of {wizard_step_total}: {wizard_stage_label}",
         "data": {
           "currency_symbol": "Currency symbol",
           "overpaid_pct_threshold": "Overpaid threshold (0–1)",
@@ -44,7 +46,9 @@
           "llm_api_key": "LLM API key (optional)",
           "llm_base_url": "LLM base URL (optional)",
           "llm_extra_instructions": "LLM extra instructions (optional)",
+          "receipt_type_llm_prompt": "Receipt type LLM prompt (optional)",
           "azure_api_version": "Azure API version",
+          "eating_out_keywords": "Eating-out keywords (comma-separated, optional)",
           "shopping_auto_approve_enabled": "Auto-add shopping items (daily)",
           "shopping_auto_approve_cooldown_days": "Auto-add cooldown (days)",
           "shopping_auto_approve_confidence_threshold": "Auto-add confidence threshold (0.5–0.99)",
@@ -58,7 +62,9 @@
           "telegram_allowed_chat_ids": "Telegram allowed chat IDs (comma-separated)",
           "telegram_auto_detect": "Telegram auto-detect receipt vs inventory",
           "telegram_send_feedback": "Telegram send analysis feedback",
-          "exports_path": "Exports folder path"
+          "exports_path": "Exports folder path",
+          "wizard_back": "Go back to previous step",
+          "wizard_confirm": "Confirm and save options"
         }
       }
     }

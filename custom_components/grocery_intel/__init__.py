@@ -66,6 +66,8 @@ from .const import (
     CONF_LLM_API_KEY,
     CONF_LLM_BASE_URL,
     CONF_LLM_EXTRA_INSTRUCTIONS,
+    CONF_RECEIPT_TYPE_LLM_PROMPT,
+    CONF_EATING_OUT_KEYWORDS,
     CONF_AZURE_API_VERSION,
     DEFAULT_CURRENCY_SYMBOL,
     DEFAULT_RECEIPTS_INBOX_PATH,
@@ -83,6 +85,8 @@ from .const import (
     DEFAULT_LLM_API_KEY,
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
+    DEFAULT_RECEIPT_TYPE_LLM_PROMPT,
+    DEFAULT_EATING_OUT_KEYWORDS,
     DEFAULT_AZURE_API_VERSION,
     SERVICE_ADD_RECEIPT,
     SERVICE_UNDO_ACTIVITY,
@@ -161,6 +165,150 @@ def _is_pdf_ext(ext: str) -> bool:
 
 def _is_image_ext(ext: str) -> bool:
     return ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+
+
+RECEIPT_TYPE_GROCERY = "grocery"
+RECEIPT_TYPE_EATING_OUT = "eating_out"
+
+_RECEIPT_TYPE_ALIASES: dict[str, str] = {
+    "grocery": RECEIPT_TYPE_GROCERY,
+    "groceries": RECEIPT_TYPE_GROCERY,
+    "eat_out": RECEIPT_TYPE_EATING_OUT,
+    "eating_out": RECEIPT_TYPE_EATING_OUT,
+    "dining": RECEIPT_TYPE_EATING_OUT,
+    "restaurant": RECEIPT_TYPE_EATING_OUT,
+    "takeout": RECEIPT_TYPE_EATING_OUT,
+    "take_away": RECEIPT_TYPE_EATING_OUT,
+    "takeaway": RECEIPT_TYPE_EATING_OUT,
+    "food_delivery": RECEIPT_TYPE_EATING_OUT,
+    "delivery": RECEIPT_TYPE_EATING_OUT,
+}
+
+_EATING_OUT_STORE_HINTS: tuple[str, ...] = (
+    "restaurant",
+    "restaurang",
+    "pizzeria",
+    "pizza",
+    "burger",
+    "kebab",
+    "sushi",
+    "bistro",
+    "cafe",
+    "coffee",
+    "bar",
+    "pub",
+    "grill",
+    "takeaway",
+    "take away",
+    "delivery",
+    "doordash",
+    "uber eats",
+    "ubereats",
+    "foodora",
+    "wolt",
+    "just eat",
+    "bolt food",
+    "mcdonald",
+    "burger king",
+    "pizza hut",
+    "domino",
+    "kfc",
+    "subway",
+)
+
+_EATING_OUT_TEXT_HINTS: tuple[str, ...] = (
+    "doordash",
+    "uber eats",
+    "ubereats",
+    "foodora",
+    "wolt",
+    "just eat",
+    "bolt food",
+)
+
+
+def _custom_eating_out_hints(entry: ConfigEntry | None) -> tuple[str, ...]:
+    if entry is None:
+        return ()
+    raw = _safe_str(entry.options.get(CONF_EATING_OUT_KEYWORDS, DEFAULT_EATING_OUT_KEYWORDS))
+    if not raw:
+        return ()
+    out: list[str] = []
+    for part in raw.split(","):
+        p = part.strip().casefold()
+        if p:
+            out.append(p)
+    return tuple(dict.fromkeys(out))
+
+
+def _format_receipt_type(value: Any) -> str:
+    normalized = _normalize_receipt_type(value)
+    if normalized == RECEIPT_TYPE_EATING_OUT:
+        return "Eating out"
+    if normalized == RECEIPT_TYPE_GROCERY:
+        return "Grocery"
+    return "Unknown"
+
+
+def _normalize_receipt_type(value: Any) -> str | None:
+    raw = _safe_str(value)
+    if not raw:
+        return None
+    key = raw.casefold().replace("-", "_").replace(" ", "_")
+    return _RECEIPT_TYPE_ALIASES.get(key)
+
+
+def _infer_receipt_type(
+    *,
+    store_name: str | None,
+    filename: str | None,
+    raw_text: str | None,
+    ocr_text: str | None,
+    custom_hints: tuple[str, ...] = (),
+    llm_receipt_type: str | None = None,
+) -> str:
+    llm_type = _normalize_receipt_type(llm_receipt_type)
+    if llm_type is not None:
+        return llm_type
+
+    extra_hints = tuple(h.casefold() for h in custom_hints if isinstance(h, str) and h.strip())
+    all_store_hints = _EATING_OUT_STORE_HINTS + extra_hints
+    all_text_hints = _EATING_OUT_TEXT_HINTS + extra_hints
+
+    store_and_file = f"{_safe_str(store_name)} {_safe_str(filename)}".casefold()
+    if any(hint in store_and_file for hint in all_store_hints):
+        return RECEIPT_TYPE_EATING_OUT
+
+    text = f"{_safe_str(raw_text)} {_safe_str(ocr_text)}".casefold()
+    if any(hint in text for hint in all_text_hints):
+        return RECEIPT_TYPE_EATING_OUT
+
+    return RECEIPT_TYPE_GROCERY
+
+
+def _apply_auto_receipt_type(
+    updates: dict[str, Any], receipt: dict[str, Any], *, entry: ConfigEntry | None = None
+) -> None:
+    llm_candidate = _safe_str(updates.pop("receipt_type_llm", None))
+    explicit = _normalize_receipt_type(updates.get("receipt_type"))
+    if explicit is not None:
+        updates["receipt_type"] = explicit
+        return
+    if "receipt_type" in updates:
+        updates["receipt_type"] = None
+        return
+
+    existing = _normalize_receipt_type(receipt.get("receipt_type"))
+    inferred = _infer_receipt_type(
+        store_name=_safe_str(updates.get("store_name")) or _safe_str(receipt.get("store_name")),
+        filename=_safe_str(receipt.get("filename")),
+        raw_text=_safe_str(updates.get("raw_text")) or _safe_str(receipt.get("raw_text")),
+        ocr_text=_safe_str(updates.get("ocr_text")) or _safe_str(receipt.get("ocr_text")),
+        custom_hints=_custom_eating_out_hints(entry),
+        llm_receipt_type=llm_candidate,
+    )
+    if existing is None or (existing == RECEIPT_TYPE_GROCERY and inferred == RECEIPT_TYPE_EATING_OUT):
+        updates["receipt_type"] = inferred
 
 
 async def _async_semantic_dedupe_after_extract(
@@ -517,6 +665,15 @@ def _register_services(hass: HomeAssistant) -> None:
         extra=vol.ALLOW_EXTRA,
     )
 
+    def _validate_receipt_type(value: Any) -> str:
+        raw = str(value or "").strip()
+        if raw == "":
+            return ""
+        normalized = _normalize_receipt_type(raw)
+        if normalized is None:
+            raise vol.Invalid("receipt_type must be one of: grocery, eating_out")
+        return normalized
+
     async def handle_add_receipt(call: ServiceCall) -> None:
         data = _get_data(hass)
         if data is None:
@@ -525,6 +682,7 @@ def _register_services(hass: HomeAssistant) -> None:
         total = call.data["total"]
         date_str = call.data.get("date")
         store = call.data.get("store")
+        receipt_type = _normalize_receipt_type(call.data.get("receipt_type"))
         raw_text = call.data.get("raw_text")
         line_items = call.data.get("line_items")
 
@@ -538,6 +696,14 @@ def _register_services(hass: HomeAssistant) -> None:
                 total=total,
                 date_str=date_str,
                 store=store,
+                receipt_type=receipt_type
+                or _infer_receipt_type(
+                    store_name=_safe_str(store),
+                    filename=None,
+                    raw_text=_safe_str(raw_text),
+                    ocr_text=None,
+                    custom_hints=_custom_eating_out_hints(entry),
+                ),
                 raw_text=raw_text,
                 currency=currency,
                 line_items=line_items,
@@ -608,6 +774,18 @@ def _register_services(hass: HomeAssistant) -> None:
 
         if "currency" in call.data:
             updates["currency"] = (call.data.get("currency") or "").strip() or None
+        if "receipt_type" in call.data:
+            raw_receipt_type = (call.data.get("receipt_type") or "").strip()
+            if raw_receipt_type == "":
+                updates["receipt_type"] = None
+            else:
+                normalized = _normalize_receipt_type(raw_receipt_type)
+                if normalized is None:
+                    _LOGGER.warning(
+                        "Invalid receipt_type for receipt_id=%s: %s", receipt_id, raw_receipt_type
+                    )
+                    return
+                updates["receipt_type"] = normalized
 
         clear_items = bool(call.data.get("clear_line_items", False))
         if clear_items:
@@ -638,6 +816,7 @@ def _register_services(hass: HomeAssistant) -> None:
             if canonical:
                 updates["store_name"] = canonical
 
+        _apply_auto_receipt_type(updates, receipt, entry=_get_entry(hass))
         await data.storage.async_update_receipt(receipt_id, updates)
 
         # Learning: if the user corrected store name, remember it as an alias.
@@ -1308,6 +1487,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Required("total"): vol.Coerce(float),
                 vol.Optional("date"): cv.string,
                 vol.Optional("store"): cv.string,
+                vol.Optional("receipt_type"): _validate_receipt_type,
                 vol.Optional("raw_text"): cv.string,
                 vol.Optional("line_items"): vol.All(cv.ensure_list, [line_item_schema]),
             }
@@ -1324,6 +1504,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("purchased_at"): cv.string,
                 vol.Optional("total"): vol.Coerce(float),
                 vol.Optional("currency"): cv.string,
+                vol.Optional("receipt_type"): _validate_receipt_type,
                 vol.Optional("line_items"): vol.All(cv.ensure_list, [line_item_schema]),
                 vol.Optional("clear_line_items", default=False): cv.boolean,
                 vol.Optional("reprocess", default=True): cv.boolean,
@@ -1856,6 +2037,13 @@ async def _async_ingest_receipt_bytes(
         total=None,
         date_str=None,
         store=None,
+        receipt_type=_infer_receipt_type(
+            store_name=None,
+            filename=os.path.basename(dest),
+            raw_text=_safe_str(source_meta.get("caption")) if isinstance(source_meta, dict) else None,
+            ocr_text=None,
+            custom_hints=_custom_eating_out_hints(entry),
+        ),
         raw_text=None,
         currency=None,
         line_items=None,
@@ -2009,6 +2197,7 @@ async def _async_maybe_notify_telegram_receipt(
     filename = receipt.get("filename") or "receipt"
     if status == "done":
         store = receipt.get("store_name") or "Unknown"
+        receipt_type = _format_receipt_type(receipt.get("receipt_type"))
         purchased_at = _format_iso_dt_for_user(hass, receipt.get("purchased_at"))
         total = receipt.get("total")
         currency = receipt.get("currency") or entry.options.get(CONF_CURRENCY_SYMBOL, DEFAULT_CURRENCY_SYMBOL) or ""
@@ -2022,6 +2211,7 @@ async def _async_maybe_notify_telegram_receipt(
             total_str = f"{total} {currency}".strip() if total is not None else "Unknown total"
         text = (
             f"Receipt analyzed: {filename}\n"
+            f"- Type: {receipt_type}\n"
             f"- Store: {store}\n"
             f"- When: {purchased_at}\n"
             f"- Total: {total_str}\n"
@@ -2147,6 +2337,13 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
             total=None,
             date_str=None,
             store=None,
+            receipt_type=_infer_receipt_type(
+                store_name=None,
+                filename=record["filename"],
+                raw_text=None,
+                ocr_text=None,
+                custom_hints=_custom_eating_out_hints(entry),
+            ),
             raw_text=None,
             currency=None,
             line_items=None,
@@ -2870,6 +3067,7 @@ async def _async_run_ocr_for_receipt(
         if canonical:
             updates["store_name"] = canonical
 
+    _apply_auto_receipt_type(updates, receipt, entry=entry)
     await data.storage.async_update_receipt(receipt_id, updates)
     if "line_items_raw" in updates:
         await data.storage.async_reprocess_receipts(receipt_id, 1)
@@ -2885,7 +3083,7 @@ async def _async_run_ocr_for_receipt(
         await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
 
     # Receipt status changed to "done", so refresh analytics (includes processing counts).
-    data.request_refresh()
+    data.request_refresh(delay=0.0)
     await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
 
 
@@ -3042,6 +3240,9 @@ async def _async_run_llm_for_receipt_file(
                     llm_extra = entry.options.get(
                         CONF_LLM_EXTRA_INSTRUCTIONS, DEFAULT_LLM_EXTRA_INSTRUCTIONS
                     ) or ""
+                    llm_type_prompt = entry.options.get(
+                        CONF_RECEIPT_TYPE_LLM_PROMPT, DEFAULT_RECEIPT_TYPE_LLM_PROMPT
+                    ) or ""
 
                     provider = str(llm_provider).lower()
                     if not llm_model:
@@ -3068,7 +3269,7 @@ async def _async_run_llm_for_receipt_file(
                             model=llm_model,
                             filename=filename,
                             image_b64=pdf_img_b64,
-                            system_prompt=_llm_system_prompt(str(llm_extra)),
+                            system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
                         )
                     elif provider == "openai":
                         base = llm_base_url or "https://api.openai.com"
@@ -3083,7 +3284,7 @@ async def _async_run_llm_for_receipt_file(
                             filename=filename,
                             image_b64=pdf_img_b64,
                             image_mime="image/png",
-                            system_prompt=_llm_system_prompt(str(llm_extra)),
+                            system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
                         )
                     else:
                         await _async_mark_extract_failed(
@@ -3217,6 +3418,9 @@ async def _async_run_llm_for_receipt_file(
                             parsed_dt = _parse_date_from_text(purchased_val)
                             if parsed_dt is not None:
                                 updates["purchased_at"] = parsed_dt.isoformat()
+                        llm_receipt_type = _normalize_receipt_type(combined_fields.get("receipt_type"))
+                        if llm_receipt_type is not None:
+                            updates["receipt_type_llm"] = llm_receipt_type
 
                         if overwrite or not (receipt.get("line_items_raw") or []):
                             items = _coerce_line_items(combined_fields.get("line_items"))
@@ -3242,10 +3446,11 @@ async def _async_run_llm_for_receipt_file(
                             payload={"receipt_id": receipt_id, "filename": filename},
                         )
 
+                    _apply_auto_receipt_type(updates, receipt, entry=entry)
                     await data.storage.async_update_receipt(receipt_id, updates)
                     if "line_items_raw" in updates:
                         await data.storage.async_reprocess_receipts(receipt_id, 1)
-                    data.request_refresh()
+                    data.request_refresh(delay=0.0)
                     await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
                     return
 
@@ -3294,6 +3499,7 @@ async def _async_run_llm_for_receipt_file(
                         updates["store_entity_id"] = store_eid
                     if canonical:
                         updates["store_name"] = canonical
+                _apply_auto_receipt_type(updates, receipt, entry=entry)
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
                     await data.storage.async_reprocess_receipts(receipt_id, 1)
@@ -3302,7 +3508,7 @@ async def _async_run_llm_for_receipt_file(
                     description=f"LLM parsed receipt file: {filename}",
                     payload={"receipt_id": receipt_id, "filename": filename},
                 )
-                data.request_refresh()
+                data.request_refresh(delay=0.0)
                 await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
                 return
 
@@ -3313,6 +3519,9 @@ async def _async_run_llm_for_receipt_file(
                 llm_api_key = entry.options.get(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY) or ""
                 llm_extra = entry.options.get(
                     CONF_LLM_EXTRA_INSTRUCTIONS, DEFAULT_LLM_EXTRA_INSTRUCTIONS
+                ) or ""
+                llm_type_prompt = entry.options.get(
+                    CONF_RECEIPT_TYPE_LLM_PROMPT, DEFAULT_RECEIPT_TYPE_LLM_PROMPT
                 ) or ""
 
                 provider = str(llm_provider).lower()
@@ -3336,7 +3545,7 @@ async def _async_run_llm_for_receipt_file(
                         model=llm_model,
                         filename=filename,
                         image_b64=img_b64,
-                        system_prompt=_llm_system_prompt(str(llm_extra)),
+                        system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
                     )
                 elif provider == "openai":
                     base = llm_base_url or "https://api.openai.com"
@@ -3351,7 +3560,7 @@ async def _async_run_llm_for_receipt_file(
                         filename=filename,
                         image_b64=img_b64,
                         image_mime=img_mime,
-                        system_prompt=_llm_system_prompt(str(llm_extra)),
+                        system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
                     )
                 else:
                     await _async_mark_extract_failed(
@@ -3501,6 +3710,9 @@ async def _async_run_llm_for_receipt_file(
                         parsed_dt = _parse_date_from_text(purchased_val)
                         if parsed_dt is not None:
                             updates["purchased_at"] = parsed_dt.isoformat()
+                    llm_receipt_type = _normalize_receipt_type(combined_fields.get("receipt_type"))
+                    if llm_receipt_type is not None:
+                        updates["receipt_type_llm"] = llm_receipt_type
 
                     if overwrite or not (receipt.get("line_items_raw") or []):
                         items = _coerce_line_items(combined_fields.get("line_items"))
@@ -3528,6 +3740,7 @@ async def _async_run_llm_for_receipt_file(
                         payload={"receipt_id": receipt_id, "filename": filename},
                     )
 
+                _apply_auto_receipt_type(updates, receipt, entry=entry)
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
                     await data.storage.async_reprocess_receipts(receipt_id, 1)
@@ -3536,7 +3749,7 @@ async def _async_run_llm_for_receipt_file(
                 if updates.get("extract_status") == "done":
                     await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
 
-                data.request_refresh()
+                data.request_refresh(delay=0.0)
                 if updates.get("extract_status") == "done":
                     await _async_maybe_notify_telegram_receipt(
                         data, receipt_id=receipt_id, status="done"
@@ -3906,19 +4119,18 @@ async def _async_mark_extract_failed(
     finished_iso = dt_util.now().isoformat()
     started_iso = _safe_str(current.get("extract_started_at")) or _safe_str(receipt.get("extract_started_at"))
     duration_ms = _ms_between_iso(started_iso, finished_iso)
-    await data.storage.async_update_receipt(
-        receipt_id,
-        {
-            "extract_status": "failed",
-            "extract_attempts": attempts,
-            "extract_started_at": None,
-            "extract_queued_at": None,
-            "extract_finished_at": finished_iso,
-            "extract_duration_ms": duration_ms,
-            "ocr_text": None,
-            "ocr_confidence": None,
-        },
-    )
+    updates = {
+        "extract_status": "failed",
+        "extract_attempts": attempts,
+        "extract_started_at": None,
+        "extract_queued_at": None,
+        "extract_finished_at": finished_iso,
+        "extract_duration_ms": duration_ms,
+        "ocr_text": None,
+        "ocr_confidence": None,
+    }
+    _apply_auto_receipt_type(updates, current or receipt, entry=_get_entry(data.hass))
+    await data.storage.async_update_receipt(receipt_id, updates)
 
     await data.activity.async_add_activity(
         kind="extract_failed",
@@ -3927,7 +4139,7 @@ async def _async_mark_extract_failed(
     )
 
     # Receipt status changed to "failed", so refresh analytics (includes processing counts).
-    data.request_refresh()
+    data.request_refresh(delay=0.0)
     await _async_maybe_notify_telegram_receipt(
         data, receipt_id=receipt_id, status="failed", reason=reason
     )
@@ -4038,6 +4250,7 @@ def _sanitize_llm_fields(fields: dict[str, Any]) -> dict[str, Any]:
         if dt_util.as_local(dt) > future_cutoff:
             dt = None
     cleaned["purchased_at"] = dt.isoformat() if dt is not None else None
+    cleaned["receipt_type"] = _normalize_receipt_type(fields.get("receipt_type"))
 
     # Line items: keep as-is (coercion happens later), but ensure list.
     li = fields.get("line_items")
@@ -4307,11 +4520,14 @@ def _heuristic_line_items_from_text(text: str) -> list[dict[str, Any]]:
     return items[:80]
 
 
-def _llm_system_prompt(extra_instructions: str | None = None) -> str:
+def _llm_system_prompt(
+    extra_instructions: str | None = None, receipt_type_prompt: str | None = None
+) -> str:
     base = (
         "Extract receipt fields. Return JSON only with keys: "
         "store_name (string|null), purchased_at (string|null, ISO 8601 date or datetime), "
-        "total (number|null), line_items (array|null). Do not include any extra keys.\n\n"
+        "total (number|null), receipt_type (string|null: grocery|eating_out), line_items (array|null). "
+        "Do not include any extra keys.\n\n"
         "Rules:\n"
         "- Do NOT guess. Only extract values you can clearly read from the receipt. If uncertain, use null.\n"
         "- total must be the grand total to pay (not subtotal, not tax, not change, not a line item).\n"
@@ -4321,15 +4537,22 @@ def _llm_system_prompt(extra_instructions: str | None = None) -> str:
         "- Only set purchased_at if the date/time is explicitly printed on the receipt.\n"
         "- store_name should be the merchant/store name (avoid generic words like 'kvitto'/'receipt').\n"
         "- store_name should come from the merchant header/logo line(s), not from street/city/address lines.\n"
+        "- receipt_type should be 'eating_out' for restaurants/cafes/bars/takeaway/food-delivery receipts, "
+        "otherwise 'grocery'. If uncertain, use null.\n"
         "- line_items should be an array of objects with keys: raw_name (string), line_total (number), "
         "qty_raw (string|null), unit_price_raw (number|null). Use line_total as the total price for that line.\n"
         "- If you cannot extract line items, set line_items to an empty array [].\n"
-        "- If the receipt is too blurry or unreadable, return {\"store_name\": null, \"purchased_at\": null, \"total\": null, \"line_items\": []}."
+        "- If the receipt is too blurry or unreadable, return "
+        "{\"store_name\": null, \"purchased_at\": null, \"total\": null, \"receipt_type\": null, \"line_items\": []}."
     )
     extra = (extra_instructions or "").strip()
-    if not extra:
-        return base
-    return base + "\n\nUser instructions:\n" + extra
+    type_extra = (receipt_type_prompt or "").strip()
+    sections = [base]
+    if extra:
+        sections.append("User instructions:\n" + extra)
+    if type_extra:
+        sections.append("Receipt type instructions:\n" + type_extra)
+    return "\n\n".join(sections)
 
 
 def _llm_line_items_only_system_prompt(extra_instructions: str | None = None) -> str:
@@ -4426,6 +4649,7 @@ async def _async_llm_openai_extract(
             "store_name": {"type": ["string", "null"]},
             "purchased_at": {"type": ["string", "null"]},
             "total": {"type": ["number", "null"]},
+            "receipt_type": {"type": ["string", "null"], "enum": ["grocery", "eating_out", None]},
             "line_items": {
                 "type": ["array", "null"],
                 "items": {
@@ -4443,7 +4667,7 @@ async def _async_llm_openai_extract(
             },
         },
         # OpenAI's strict json_schema requires required to include every key in properties.
-        "required": ["store_name", "purchased_at", "total", "line_items"],
+        "required": ["store_name", "purchased_at", "total", "receipt_type", "line_items"],
     }
 
     payload = {
@@ -4505,6 +4729,7 @@ async def _async_llm_openai_vision_extract(
             "store_name": {"type": ["string", "null"]},
             "purchased_at": {"type": ["string", "null"]},
             "total": {"type": ["number", "null"]},
+            "receipt_type": {"type": ["string", "null"], "enum": ["grocery", "eating_out", None]},
             "line_items": {
                 "type": ["array", "null"],
                 "items": {
@@ -4522,7 +4747,7 @@ async def _async_llm_openai_vision_extract(
             },
         },
         # OpenAI's strict json_schema requires required to include every key in properties.
-        "required": ["store_name", "purchased_at", "total", "line_items"],
+        "required": ["store_name", "purchased_at", "total", "receipt_type", "line_items"],
     }
 
     data_url = f"data:{image_mime};base64,{image_b64}"
@@ -4855,7 +5080,10 @@ async def _async_extract_receipt_fields(
     llm_base_url = entry.options.get(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL) or ""
     azure_api_version = entry.options.get(CONF_AZURE_API_VERSION, DEFAULT_AZURE_API_VERSION) or ""
     llm_extra = entry.options.get(CONF_LLM_EXTRA_INSTRUCTIONS, DEFAULT_LLM_EXTRA_INSTRUCTIONS) or ""
-    system_prompt = _llm_system_prompt(str(llm_extra))
+    llm_receipt_type_prompt = (
+        entry.options.get(CONF_RECEIPT_TYPE_LLM_PROMPT, DEFAULT_RECEIPT_TYPE_LLM_PROMPT) or ""
+    )
+    system_prompt = _llm_system_prompt(str(llm_extra), str(llm_receipt_type_prompt))
 
     def should_set(field: str) -> bool:
         if overwrite:
@@ -5005,6 +5233,9 @@ async def _async_extract_receipt_fields(
             store_val = _safe_str(llm_fields.get("store_name"))
             if store_val:
                 updates["store_name"] = store_val
+        llm_receipt_type = _normalize_receipt_type(llm_fields.get("receipt_type"))
+        if llm_receipt_type is not None:
+            updates["receipt_type_llm"] = llm_receipt_type
 
         # Fallback: if LLM didn't produce header fields, try heuristics on available text.
         # This improves robustness for PDF text-layer parsing when the LLM endpoint is unavailable.

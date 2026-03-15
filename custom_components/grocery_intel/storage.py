@@ -24,6 +24,7 @@ class Receipt:
     total: float | None
     purchased_at: str | None
     store_name: str | None
+    receipt_type: str | None
     currency: str | None
     raw_text: str | None
     ocr_text: str | None
@@ -42,6 +43,10 @@ class ReceiptStorage:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._store = storage.Store(hass, STORE_VERSION, STORE_KEY)
+        self._receipt_revision: int = 0
+        self._product_match_cache_dirty: bool = True
+        self._product_name_index: dict[str, str] = {}
+        self._product_match_candidates: list[tuple[str, str]] = []
         self._data: dict[str, Any] = {
             "receipts": {},
             "line_items": {},
@@ -100,6 +105,7 @@ class ReceiptStorage:
                 receipt.setdefault("extract_provider", None)
                 receipt.setdefault("extract_model", None)
                 receipt.setdefault("store_entity_id", None)
+                receipt.setdefault("receipt_type", None)
                 receipt.setdefault("content_hash", None)
 
                 # Don't persist "queued" across restarts.
@@ -110,6 +116,8 @@ class ReceiptStorage:
                 row.setdefault("taken_at", None)
                 row.setdefault("source_type", None)
                 row.setdefault("source_meta", {})
+        self._receipt_revision = 1 if self._data.get("receipts") else 0
+        self._invalidate_product_match_cache()
 
     async def async_save(self) -> None:
         await self._store.async_save(self._data)
@@ -128,6 +136,8 @@ class ReceiptStorage:
             "store_aliases": {},
             "stores": {},
         }
+        self._bump_receipt_revision()
+        self._invalidate_product_match_cache()
         await self.async_save()
 
     async def async_add_receipt(
@@ -136,6 +146,7 @@ class ReceiptStorage:
         total: float | None,
         date_str: str | None,
         store: str | None,
+        receipt_type: str | None,
         raw_text: str | None,
         currency: str | None,
         line_items: list[dict[str, Any]] | None,
@@ -154,6 +165,7 @@ class ReceiptStorage:
             "total": float(total) if total is not None else None,
             "purchased_at": purchased_at.isoformat() if purchased_at else None,
             "store_name": store,
+            "receipt_type": receipt_type,
             "store_entity_id": None,
             "currency": currency,
             "raw_text": raw_text,
@@ -179,6 +191,7 @@ class ReceiptStorage:
         }
 
         self._data["receipts"][receipt_id] = receipt
+        self._bump_receipt_revision()
 
         if line_items:
             await self._add_line_items(receipt_id, store, purchased_at, line_items)
@@ -193,6 +206,7 @@ class ReceiptStorage:
         self._data["receipts"].pop(receipt_id)
         self._delete_line_items_for_receipt(receipt_id)
         self._delete_observations_for_receipt(receipt_id)
+        self._bump_receipt_revision()
         await self.async_save()
         return True
 
@@ -206,6 +220,7 @@ class ReceiptStorage:
         if not receipt:
             return False
         receipt.update(updates)
+        self._bump_receipt_revision()
         if save:
             await self.async_save()
         return True
@@ -226,8 +241,12 @@ class ReceiptStorage:
         receipt["extract_method"] = None
         receipt["extract_provider"] = None
         receipt["extract_model"] = None
+        self._bump_receipt_revision()
         await self.async_save()
         return True
+
+    async def async_get_receipt_revision(self) -> int:
+        return int(self._receipt_revision)
 
     async def async_list_receipts(self) -> list[dict[str, Any]]:
         return list(self._data["receipts"].values())
@@ -975,19 +994,52 @@ class ReceiptStorage:
 
     def _match_or_create_product(self, raw_name: str) -> tuple[str, int]:
         normalized = _normalize_name(raw_name)
+        if not normalized:
+            product_id = uuid.uuid4().hex
+            canonical = _canonical_name(raw_name or "Unknown")
+            now = dt_util.now().isoformat()
+            self._data["products"][product_id] = {
+                "product_id": product_id,
+                "canonical_name": canonical,
+                "aliases": [raw_name] if raw_name else [],
+                "unit_type": "unknown",
+                "created_at": now,
+                "updated_at": now,
+            }
+            self._invalidate_product_match_cache()
+            return product_id, 100
+
+        self._ensure_product_match_cache()
+        exact_id = self._product_name_index.get(normalized)
+        if exact_id and exact_id in self._data["products"]:
+            product = self._data["products"][exact_id]
+            aliases = set(product.get("aliases", []))
+            if raw_name not in aliases:
+                aliases.add(raw_name)
+                product["aliases"] = sorted(aliases)
+                self._invalidate_product_match_cache()
+            return exact_id, 100
+
         best_id = None
         best_score = 0.0
-        for product in self._data["products"].values():
-            candidate_names = [product.get("canonical_name", "")] + list(
-                product.get("aliases", [])
-            )
-            for name in candidate_names:
-                score = SequenceMatcher(
-                    None, normalized, _normalize_name(str(name))
-                ).ratio()
-                if score > best_score:
-                    best_score = score
-                    best_id = product.get("product_id")
+        left_tokens = {t for t in normalized.split(" ") if t}
+        left_first = normalized[:1]
+        left_len = len(normalized)
+
+        for pid, candidate in self._product_match_candidates:
+            cand_len = len(candidate)
+            if abs(cand_len - left_len) > max(8, left_len // 2):
+                continue
+            if left_first and candidate[:1] != left_first:
+                continue
+            if left_tokens:
+                cand_tokens = {t for t in candidate.split(" ") if t}
+                if cand_tokens.isdisjoint(left_tokens):
+                    continue
+            score = SequenceMatcher(None, normalized, candidate).ratio()
+            if score > best_score:
+                best_score = score
+                best_id = pid
 
         if best_id and best_score >= MATCH_THRESHOLD:
             product = self._data["products"][best_id]
@@ -995,6 +1047,7 @@ class ReceiptStorage:
             if raw_name not in aliases:
                 aliases.add(raw_name)
                 product["aliases"] = sorted(aliases)
+                self._invalidate_product_match_cache()
             return best_id, int(best_score * 100)
 
         product_id = uuid.uuid4().hex
@@ -1008,7 +1061,31 @@ class ReceiptStorage:
             "created_at": now,
             "updated_at": now,
         }
+        self._invalidate_product_match_cache()
         return product_id, 100
+
+    def _bump_receipt_revision(self) -> None:
+        self._receipt_revision += 1
+
+    def _invalidate_product_match_cache(self) -> None:
+        self._product_match_cache_dirty = True
+
+    def _ensure_product_match_cache(self) -> None:
+        if not self._product_match_cache_dirty:
+            return
+        self._product_name_index = {}
+        self._product_match_candidates = []
+        for product_id, product in self._data.get("products", {}).items():
+            if not isinstance(product, dict):
+                continue
+            names = [product.get("canonical_name", "")] + list(product.get("aliases", []))
+            for name in names:
+                normalized = _normalize_name(str(name))
+                if not normalized:
+                    continue
+                self._product_name_index.setdefault(normalized, str(product_id))
+                self._product_match_candidates.append((str(product_id), normalized))
+        self._product_match_cache_dirty = False
 
     def _delete_line_items_for_receipt(self, receipt_id: str) -> None:
         to_delete = [

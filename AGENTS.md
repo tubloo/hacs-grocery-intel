@@ -8,6 +8,10 @@ This file is the canonical agent handoff for this repo. Prefer it over any other
 2. For any non-trivial change, skim `README.md` and `custom_components/grocery_intel/services.yaml` for user-facing expectations.
 3. If behavior is unclear, inspect the code rather than guessing (especially prompt strings and service schemas).
 
+## Compatibility baseline
+
+- Minimum supported Home Assistant Core version: `2024.1.0` (see `custom_components/grocery_intel/manifest.json`).
+
 ## Debug info requests (how to ask users)
 
 When you need debug info from Home Assistant, prefer providing a **ready-to-run** snippet for **Developer Tools → Template** that prints a single JSON blob the user can paste back.
@@ -34,6 +38,8 @@ Guidelines:
 ### Receipt ingestion
 
 - Sources: manual service calls, file inbox scanning, Telegram intake (optional).
+- Optional receipt categorization: `receipt_type` (`grocery` or `eating_out`) can be set manually and is auto-detected from merchant/file/text hints.
+- Detection customization: users can provide extra eating-out keywords and an optional receipt-type LLM prompt in options.
 - Receipts inbox → archive:
   - Inbox: `/media/grocery_intel/receipts_inbox`
   - Archive: `/media/grocery_intel/receipts_archive`

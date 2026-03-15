@@ -23,6 +23,9 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 
 ## Installation
 
+### Requirements
+- Home Assistant Core `2024.1.0` or newer.
+
 ### HACS (Custom Repository)
 1. HACS → three-dot menu → **Custom repositories**
 2. Add this repo URL and select **Integration**
@@ -57,7 +60,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 ## Data model (high level)
 Grocery Intel stores its richer data in Home Assistant storage (`/config/.storage/grocery_intel.data`). Sensors are summaries over that data.
 
-- Receipts: one row per receipt (source file, `purchased_at`, `total`, `store_name`, `extract_status`, timing fields, optional `content_hash`)
+- Receipts: one row per receipt (source file, `purchased_at`, `total`, `store_name`, optional `receipt_type` as `grocery`/`eating_out`, `extract_status`, timing fields, optional `content_hash`)
 - Stores: canonical store entities (`store_entity_id`) used to group receipts even when names vary.
   - Matching prefers strong merchant hints when available (org/store ID/phone/address/postal/city).
   - If a receipt only yields a store/chain name (no hints), Grocery Intel reuses an existing matching store entity (by normalized `chain_name`/aliases) to avoid creating many empty duplicates.
@@ -123,6 +126,8 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `grocery_intel.export_data`
 - `grocery_intel.dedupe_stores` (dry-run by default; merges duplicate store entities and updates receipts)
 
+`grocery_intel.add_receipt` and `grocery_intel.update_receipt` accept optional `receipt_type` (`grocery` or `eating_out`). If omitted on ingestion, Grocery Intel auto-detects a type from merchant/file/text hints and will promote a receipt to `eating_out` when strong restaurant/delivery signals are found.
+
 ## Troubleshooting
 
 ### Sensors appear stale / missing recent receipts
@@ -141,6 +146,8 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
     - The integration asks the LLM for `total`, `store_name`, `purchased_at`, and `line_items` (best-effort). For images/PDF-vision it will do a second “line items only” pass to improve extraction.
   - `hybrid`: uses OCR + heuristics first, then LLM to fill missing fields (and attempt line item extraction).
 - Optional: `LLM extra instructions` lets you add fine-tuning instructions; the integration always enforces a JSON-only contract and appends your instructions.
+- Optional: `Receipt type LLM prompt` lets you add custom classification guidance specifically for `receipt_type` (`grocery` vs `eating_out`) when LLM extraction runs.
+- Optional: `Eating-out keywords` lets you add comma-separated keyword hints (brand/app/merchant terms) used by heuristic receipt-type detection.
 - Tip (Home Assistant in Docker): `.local` hostnames may not resolve; prefer an IP like `http://192.168.x.x:11434` for `LLM base URL`.
 - Recommended (privacy): use `/media` paths so receipts/photos are protected by Home Assistant authentication.
   - **Home Assistant OS / Supervised:** `/media` is available by default.
@@ -191,6 +198,7 @@ You can ingest receipts and inventory images from Telegram by calling `grocery_i
   - `Telegram allowed chat IDs`: recommended for security (comma-separated allowlist)
   - `Telegram auto-detect receipt vs inventory`: when enabled, PDFs default to receipts; images use caption keywords first (e.g., `receipt`, `inventory`, `fridge`, `pantry`) and may use your configured LLM (OpenAI/Ollama vision) to classify when available
   - `Telegram send analysis feedback`: replies in Telegram when queued and when analysis completes/fails (timestamps are formatted in Home Assistant local time)
+    - Receipt completion feedback includes the detected receipt type (`Grocery` or `Eating out`).
   - Limits:
     - Telegram ingests reject files larger than **25 MB** (to avoid large in-memory downloads inside Home Assistant).
 
