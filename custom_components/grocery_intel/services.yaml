@@ -143,13 +143,13 @@ scan_receipts_inbox:
   name: Scan receipts inbox
   description: Scan the receipts inbox path for new files and archive them. Already-processed files are archived with a _duplicate suffix.
 
-run_ocr:
-  name: Run OCR
-  description: Run extraction for pending receipts or a specific receipt. Uses OCR in heuristic/hybrid mode; triggers LLM file parsing when extractor_mode=llm.
+run_extraction:
+  name: Run Extraction
+  description: Run receipt extraction for pending receipts or a specific receipt using the LLM pipeline.
   fields:
     receipt_id:
       name: Receipt ID
-      description: Run OCR for a specific receipt if provided.
+      description: Run extraction for a specific receipt if provided.
       required: false
       selector:
         text:
@@ -162,7 +162,7 @@ run_ocr:
 
 reparse_receipts:
   name: Re-parse receipts
-  description: Re-parse total/date/store from existing OCR text for recent receipts (no OCR call).
+  description: Re-parse total/date/store/receipt_type/subcategories from stored receipt text for recent receipts (no file OCR). Uses LLM extraction and rebuilds derived line-item analytics when line items are updated.
   fields:
     receipt_id:
       name: Receipt ID

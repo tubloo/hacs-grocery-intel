@@ -25,6 +25,9 @@ class Receipt:
     purchased_at: str | None
     store_name: str | None
     receipt_type: str | None
+    receipt_type_source: str | None
+    receipt_subcategory: str | None
+    grocery_subcategories: list[dict[str, Any]]
     currency: str | None
     raw_text: str | None
     ocr_text: str | None
@@ -106,6 +109,9 @@ class ReceiptStorage:
                 receipt.setdefault("extract_model", None)
                 receipt.setdefault("store_entity_id", None)
                 receipt.setdefault("receipt_type", None)
+                receipt.setdefault("receipt_type_source", None)
+                receipt.setdefault("receipt_subcategory", None)
+                receipt.setdefault("grocery_subcategories", [])
                 receipt.setdefault("content_hash", None)
 
                 # Don't persist "queued" across restarts.
@@ -147,6 +153,7 @@ class ReceiptStorage:
         date_str: str | None,
         store: str | None,
         receipt_type: str | None,
+        receipt_type_source: str | None,
         raw_text: str | None,
         currency: str | None,
         line_items: list[dict[str, Any]] | None,
@@ -166,6 +173,9 @@ class ReceiptStorage:
             "purchased_at": purchased_at.isoformat() if purchased_at else None,
             "store_name": store,
             "receipt_type": receipt_type,
+            "receipt_type_source": receipt_type_source,
+            "receipt_subcategory": None,
+            "grocery_subcategories": [],
             "store_entity_id": None,
             "currency": currency,
             "raw_text": raw_text,
@@ -299,6 +309,46 @@ class ReceiptStorage:
             processed += 1
 
         if processed or receipt_id:
+            await self.async_save()
+        return processed
+
+    async def async_reprocess_receipt_ids(self, receipt_ids: list[str]) -> int:
+        """Rebuild derived line-items/observations for an explicit set of receipts."""
+        if not receipt_ids:
+            return 0
+        seen: set[str] = set()
+        targets: list[dict[str, Any]] = []
+        all_receipts = self._data.get("receipts", {})
+        for rid in receipt_ids:
+            rid_s = str(rid or "").strip()
+            if not rid_s or rid_s in seen:
+                continue
+            seen.add(rid_s)
+            receipt = all_receipts.get(rid_s) if isinstance(all_receipts, dict) else None
+            if isinstance(receipt, dict):
+                targets.append(receipt)
+
+        processed = 0
+        for receipt in targets:
+            rid = receipt.get("id")
+            if not rid:
+                continue
+
+            self._delete_line_items_for_receipt(rid)
+            self._delete_observations_for_receipt(rid)
+
+            line_items = receipt.get("line_items_raw", [])
+            if not line_items:
+                continue
+            purchased_at = dt_util.parse_datetime(receipt.get("purchased_at"))
+            if purchased_at is None:
+                continue
+            store = receipt.get("store_name")
+
+            await self._add_line_items(rid, store, purchased_at, line_items)
+            processed += 1
+
+        if seen:
             await self.async_save()
         return processed
 

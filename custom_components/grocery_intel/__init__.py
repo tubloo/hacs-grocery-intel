@@ -56,11 +56,6 @@ from .const import (
     CONF_RECEIPTS_ARCHIVE_TTL_DAYS,
     CONF_INBOX_SCAN_INTERVAL_SEC,
     CONF_ON_SUCCESS,
-    CONF_OCR_ENDPOINT_URL,
-    CONF_OCR_LANGUAGE,
-    CONF_OCR_API_TOKEN,
-    CONF_OCR_API_TOKEN_HEADER,
-    CONF_EXTRACTOR_MODE,
     CONF_LLM_PROVIDER,
     CONF_LLM_MODEL,
     CONF_LLM_API_KEY,
@@ -75,11 +70,6 @@ from .const import (
     DEFAULT_RECEIPTS_ARCHIVE_TTL_DAYS,
     DEFAULT_INBOX_SCAN_INTERVAL_SEC,
     DEFAULT_ON_SUCCESS,
-    DEFAULT_OCR_ENDPOINT_URL,
-    DEFAULT_OCR_LANGUAGE,
-    DEFAULT_OCR_API_TOKEN,
-    DEFAULT_OCR_API_TOKEN_HEADER,
-    DEFAULT_EXTRACTOR_MODE,
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_API_KEY,
@@ -92,7 +82,7 @@ from .const import (
     SERVICE_UNDO_ACTIVITY,
     SERVICE_REPROCESS_RECEIPTS,
     SERVICE_SCAN_RECEIPTS_INBOX,
-    SERVICE_RUN_OCR,
+    SERVICE_RUN_EXTRACTION,
     SERVICE_REPARSE_RECEIPTS,
     SERVICE_CLEAR_ALL_DATA,
     SERVICE_UPDATE_RECEIPT,
@@ -122,6 +112,7 @@ from .const import (
     SERVICE_TELEGRAM_INGEST,
     SERVICE_EXPORT_DATA,
     SERVICE_DEDUPE_STORES,
+    GROCERY_SUBCATEGORY_KEYWORDS,
 )
 
 
@@ -169,6 +160,8 @@ def _is_image_ext(ext: str) -> bool:
 
 RECEIPT_TYPE_GROCERY = "grocery"
 RECEIPT_TYPE_EATING_OUT = "eating_out"
+RECEIPT_TYPE_SOURCE_AUTO = "auto"
+RECEIPT_TYPE_SOURCE_MANUAL = "manual"
 
 _RECEIPT_TYPE_ALIASES: dict[str, str] = {
     "grocery": RECEIPT_TYPE_GROCERY,
@@ -182,6 +175,12 @@ _RECEIPT_TYPE_ALIASES: dict[str, str] = {
     "takeaway": RECEIPT_TYPE_EATING_OUT,
     "food_delivery": RECEIPT_TYPE_EATING_OUT,
     "delivery": RECEIPT_TYPE_EATING_OUT,
+}
+
+_RECEIPT_TYPE_SOURCE_ALIASES: dict[str, str] = {
+    "auto": RECEIPT_TYPE_SOURCE_AUTO,
+    "automatic": RECEIPT_TYPE_SOURCE_AUTO,
+    "manual": RECEIPT_TYPE_SOURCE_MANUAL,
 }
 
 _EATING_OUT_STORE_HINTS: tuple[str, ...] = (
@@ -226,6 +225,18 @@ _EATING_OUT_TEXT_HINTS: tuple[str, ...] = (
     "bolt food",
 )
 
+_EATING_OUT_SUBCATEGORY_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("delivery_meal", ("doordash", "uber eats", "ubereats", "foodora", "wolt", "just eat", "bolt food", "deliveroo")),
+    ("fast_food", ("mcdonald", "burger king", "kfc", "subway", "pizza hut", "domino")),
+    ("cafe_coffee", ("cafe", "café", "coffee", "espresso")),
+    ("bar_pub", ("bar", "pub")),
+    ("takeout_pickup", ("takeaway", "take away", "takeout")),
+    ("restaurant", ("restaurant", "restaurang", "bistro", "grill", "pizzeria", "sushi")),
+)
+
+_ALLOWED_EATING_OUT_SUBCATEGORIES = {name for name, _ in _EATING_OUT_SUBCATEGORY_HINTS} | {"restaurant"}
+_ALLOWED_GROCERY_SUBCATEGORIES = {name for name, _ in GROCERY_SUBCATEGORY_KEYWORDS} | {"unclassified"}
+
 
 def _custom_eating_out_hints(entry: ConfigEntry | None) -> tuple[str, ...]:
     if entry is None:
@@ -256,6 +267,14 @@ def _normalize_receipt_type(value: Any) -> str | None:
         return None
     key = raw.casefold().replace("-", "_").replace(" ", "_")
     return _RECEIPT_TYPE_ALIASES.get(key)
+
+
+def _normalize_receipt_type_source(value: Any) -> str | None:
+    raw = _safe_str(value)
+    if not raw:
+        return None
+    key = raw.casefold().strip()
+    return _RECEIPT_TYPE_SOURCE_ALIASES.get(key)
 
 
 def _infer_receipt_type(
@@ -290,12 +309,21 @@ def _apply_auto_receipt_type(
     updates: dict[str, Any], receipt: dict[str, Any], *, entry: ConfigEntry | None = None
 ) -> None:
     llm_candidate = _safe_str(updates.pop("receipt_type_llm", None))
+    existing_source = _normalize_receipt_type_source(
+        updates.get("receipt_type_source", receipt.get("receipt_type_source"))
+    )
     explicit = _normalize_receipt_type(updates.get("receipt_type"))
     if explicit is not None:
         updates["receipt_type"] = explicit
+        if "receipt_type_source" not in updates and existing_source is not None:
+            updates["receipt_type_source"] = existing_source
         return
     if "receipt_type" in updates:
         updates["receipt_type"] = None
+        updates["receipt_type_source"] = None
+        return
+
+    if existing_source == RECEIPT_TYPE_SOURCE_MANUAL:
         return
 
     existing = _normalize_receipt_type(receipt.get("receipt_type"))
@@ -307,8 +335,179 @@ def _apply_auto_receipt_type(
         custom_hints=_custom_eating_out_hints(entry),
         llm_receipt_type=llm_candidate,
     )
-    if existing is None or (existing == RECEIPT_TYPE_GROCERY and inferred == RECEIPT_TYPE_EATING_OUT):
+    if existing != inferred or existing_source != RECEIPT_TYPE_SOURCE_AUTO:
         updates["receipt_type"] = inferred
+        updates["receipt_type_source"] = RECEIPT_TYPE_SOURCE_AUTO
+
+
+def _infer_eating_out_subcategory(
+    *, store_name: str | None, filename: str | None, raw_text: str | None, ocr_text: str | None
+) -> str:
+    text = f"{_safe_str(store_name)} {_safe_str(filename)} {_safe_str(raw_text)} {_safe_str(ocr_text)}".casefold()
+    for subcategory, hints in _EATING_OUT_SUBCATEGORY_HINTS:
+        if any(h in text for h in hints):
+            return subcategory
+    return "restaurant"
+
+
+def _infer_grocery_line_item_subcategory(raw_name: Any) -> str:
+    text = _safe_str(raw_name)
+    if not text:
+        return "unclassified"
+    low = text.casefold()
+    for subcategory, keywords in GROCERY_SUBCATEGORY_KEYWORDS:
+        if any(keyword in low for keyword in keywords):
+            return subcategory
+    return "unclassified"
+
+
+def _compute_grocery_subcategories(
+    line_items: list[dict[str, Any]], total: float | None
+) -> list[dict[str, Any]]:
+    totals: dict[str, float] = {}
+    line_sum = 0.0
+    for item in line_items:
+        try:
+            amount = float(item.get("line_total"))
+        except Exception:
+            amount = 0.0
+        if amount <= 0:
+            continue
+        line_sum += amount
+        sub = _infer_grocery_line_item_subcategory(item.get("raw_name"))
+        totals[sub] = totals.get(sub, 0.0) + amount
+
+    if total is not None:
+        try:
+            total_f = float(total)
+        except Exception:
+            total_f = None
+    else:
+        total_f = None
+    if total_f is not None and total_f > line_sum + 0.009:
+        remainder = total_f - line_sum
+        totals["unclassified"] = totals.get("unclassified", 0.0) + remainder
+
+    if not totals and total_f is not None and total_f > 0:
+        totals["unclassified"] = total_f
+
+    return [
+        {"subcategory": name, "total": round(float(amount), 2)}
+        for name, amount in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+
+def _sanitize_receipt_subcategory(value: Any) -> str | None:
+    raw = _safe_str(value)
+    if not raw:
+        return None
+    key = raw.casefold().strip().replace("-", "_").replace(" ", "_")
+    return key if key in _ALLOWED_EATING_OUT_SUBCATEGORIES else None
+
+
+def _sanitize_grocery_subcategories(
+    value: Any, *, total: float | None = None
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    totals: dict[str, float] = {}
+    for row in value:
+        if not isinstance(row, dict):
+            continue
+        raw_name = _safe_str(row.get("subcategory"))
+        if not raw_name:
+            continue
+        name = raw_name.casefold().strip().replace("-", "_").replace(" ", "_")
+        if name not in _ALLOWED_GROCERY_SUBCATEGORIES:
+            continue
+        try:
+            amount = float(row.get("total"))
+        except Exception:
+            amount = 0.0
+        if amount <= 0:
+            continue
+        totals[name] = totals.get(name, 0.0) + amount
+
+    if total is not None:
+        known = sum(totals.values())
+        if total > known + 0.009:
+            totals["unclassified"] = totals.get("unclassified", 0.0) + (total - known)
+
+    return [
+        {"subcategory": name, "total": round(float(amount), 2)}
+        for name, amount in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+
+def _apply_auto_receipt_subcategories(updates: dict[str, Any], receipt: dict[str, Any]) -> None:
+    def _set_if_changed(field: str, value: Any) -> None:
+        current = updates.get(field) if field in updates else receipt.get(field)
+        if current != value:
+            updates[field] = value
+
+    if "receipt_type" in updates:
+        receipt_type = _normalize_receipt_type(updates.get("receipt_type"))
+    else:
+        receipt_type = _normalize_receipt_type(receipt.get("receipt_type"))
+    llm_receipt_subcategory = _sanitize_receipt_subcategory(updates.pop("receipt_subcategory_llm", None))
+    llm_grocery_subcategories = _sanitize_grocery_subcategories(updates.pop("grocery_subcategories_llm", None))
+
+    if receipt_type == RECEIPT_TYPE_EATING_OUT:
+        _set_if_changed(
+            "receipt_subcategory",
+            llm_receipt_subcategory
+            or _infer_eating_out_subcategory(
+                store_name=_safe_str(updates.get("store_name")) or _safe_str(receipt.get("store_name")),
+                filename=_safe_str(receipt.get("filename")),
+                raw_text=_safe_str(updates.get("raw_text")) or _safe_str(receipt.get("raw_text")),
+                ocr_text=_safe_str(updates.get("ocr_text")) or _safe_str(receipt.get("ocr_text")),
+            ),
+        )
+        _set_if_changed("grocery_subcategories", [])
+        return
+
+    if receipt_type == RECEIPT_TYPE_GROCERY:
+        line_items_raw = updates.get("line_items_raw")
+        if line_items_raw is None:
+            line_items_raw = receipt.get("line_items_raw") or []
+        if not isinstance(line_items_raw, list):
+            line_items_raw = []
+        total_raw = updates.get("total")
+        if total_raw is None:
+            total_raw = receipt.get("total")
+        try:
+            total = float(total_raw) if total_raw is not None else None
+        except Exception:
+            total = None
+        has_new_evidence = bool(llm_grocery_subcategories) or ("line_items_raw" in updates)
+        existing_rows = (
+            receipt.get("grocery_subcategories")
+            if isinstance(receipt.get("grocery_subcategories"), list)
+            else []
+        )
+        if not has_new_evidence and existing_rows and "receipt_type" not in updates:
+            _set_if_changed(
+                "grocery_subcategories",
+                _sanitize_grocery_subcategories(existing_rows, total=total),
+            )
+            _set_if_changed("receipt_subcategory", None)
+            return
+        if llm_grocery_subcategories:
+            rows = _sanitize_grocery_subcategories(llm_grocery_subcategories, total=total)
+        else:
+            rows = _compute_grocery_subcategories(
+                [i for i in line_items_raw if isinstance(i, dict)],
+                total,
+            )
+        _set_if_changed(
+            "grocery_subcategories",
+            rows,
+        )
+        _set_if_changed("receipt_subcategory", None)
+        return
+
+    _set_if_changed("receipt_subcategory", None)
+    _set_if_changed("grocery_subcategories", [])
 
 
 async def _async_semantic_dedupe_after_extract(
@@ -682,7 +881,13 @@ def _register_services(hass: HomeAssistant) -> None:
         total = call.data["total"]
         date_str = call.data.get("date")
         store = call.data.get("store")
-        receipt_type = _normalize_receipt_type(call.data.get("receipt_type"))
+        raw_receipt_type = call.data.get("receipt_type")
+        receipt_type = _normalize_receipt_type(raw_receipt_type)
+        receipt_type_source = (
+            RECEIPT_TYPE_SOURCE_MANUAL
+            if _safe_str(raw_receipt_type)
+            else RECEIPT_TYPE_SOURCE_AUTO
+        )
         raw_text = call.data.get("raw_text")
         line_items = call.data.get("line_items")
 
@@ -707,11 +912,13 @@ def _register_services(hass: HomeAssistant) -> None:
                 raw_text=raw_text,
                 currency=currency,
                 line_items=line_items,
+                receipt_type_source=receipt_type_source,
             )
         except ValueError as err:
             _LOGGER.warning("Invalid date provided: %s", err)
             return
 
+        post_updates: dict[str, Any] = {}
         if receipt.get("store_name"):
             store_eid, canonical = await _async_assign_store_entity(
                 data,
@@ -719,14 +926,16 @@ def _register_services(hass: HomeAssistant) -> None:
                 branch_name=None,
                 merchant_hints=None,
             )
-            if store_eid or canonical:
-                await data.storage.async_update_receipt(
-                    receipt["id"],
-                    {
-                        "store_entity_id": store_eid,
-                        "store_name": canonical or receipt.get("store_name"),
-                    },
-                )
+            if store_eid:
+                post_updates["store_entity_id"] = store_eid
+            if canonical:
+                post_updates["store_name"] = canonical
+
+        merged_receipt = dict(receipt)
+        merged_receipt.update(post_updates)
+        _apply_auto_receipt_subcategories(post_updates, merged_receipt)
+        if post_updates:
+            await data.storage.async_update_receipt(receipt["id"], post_updates)
 
         item_count = len(receipt.get("line_items_raw", []))
         await data.activity.async_add_activity(
@@ -778,6 +987,7 @@ def _register_services(hass: HomeAssistant) -> None:
             raw_receipt_type = (call.data.get("receipt_type") or "").strip()
             if raw_receipt_type == "":
                 updates["receipt_type"] = None
+                updates["receipt_type_source"] = None
             else:
                 normalized = _normalize_receipt_type(raw_receipt_type)
                 if normalized is None:
@@ -786,6 +996,7 @@ def _register_services(hass: HomeAssistant) -> None:
                     )
                     return
                 updates["receipt_type"] = normalized
+                updates["receipt_type_source"] = RECEIPT_TYPE_SOURCE_MANUAL
 
         clear_items = bool(call.data.get("clear_line_items", False))
         if clear_items:
@@ -817,6 +1028,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 updates["store_name"] = canonical
 
         _apply_auto_receipt_type(updates, receipt, entry=_get_entry(hass))
+        _apply_auto_receipt_subcategories(updates, receipt)
         await data.storage.async_update_receipt(receipt_id, updates)
 
         # Learning: if the user corrected store name, remember it as an alias.
@@ -885,53 +1097,14 @@ def _register_services(hass: HomeAssistant) -> None:
     async def handle_scan(call: ServiceCall) -> None:
         await _async_scan_receipts_inbox(hass)
 
-    async def handle_run_ocr(call: ServiceCall) -> None:
+    async def handle_run_extraction(call: ServiceCall) -> None:
         data = _get_data(hass)
         entry = _get_entry(hass)
         if data is None or entry is None:
             return
 
-        extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
-        if extractor_mode == "llm":
-            receipt_id = call.data.get("receipt_id")
-            overwrite = bool(call.data.get("overwrite", False))
-            receipts = await data.storage.async_list_receipts()
-            if receipt_id:
-                receipts = [r for r in receipts if r.get("id") == receipt_id]
-            else:
-                receipts = [
-                    r
-                    for r in receipts
-                    if r.get("file_path")
-                    and r.get("extract_status") in {"pending", "failed"}
-                ]
-            queued_any = False
-            for receipt in receipts:
-                rid = receipt.get("id")
-                if rid:
-                    await data.storage.async_update_receipt(
-                        rid,
-                        {
-                            "extract_status": "queued",
-                            "extract_queued_at": dt_util.now().isoformat(),
-                        },
-                    )
-                    queued_any = True
-                hass.async_create_task(
-                    _async_run_llm_for_receipt_file(
-                        hass,
-                        entry,
-                        data,
-                        receipt,
-                        overwrite=overwrite,
-                        force=bool(receipt_id),
-                    )
-                )
-            if queued_any:
-                data.request_refresh()
-            return
-
         receipt_id = call.data.get("receipt_id")
+        overwrite = bool(call.data.get("overwrite", False))
         receipts = await data.storage.async_list_receipts()
 
         if receipt_id:
@@ -956,7 +1129,16 @@ def _register_services(hass: HomeAssistant) -> None:
                     },
                 )
                 queued_any = True
-            hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
+            hass.async_create_task(
+                _async_run_llm_for_receipt_file(
+                    hass,
+                    entry,
+                    data,
+                    receipt,
+                    overwrite=overwrite,
+                    force=bool(receipt_id),
+                )
+            )
         if queued_any:
             data.request_refresh()
 
@@ -978,9 +1160,10 @@ def _register_services(hass: HomeAssistant) -> None:
             receipts = receipts[:limit]
 
         updated = 0
+        line_items_reprocess_ids: list[str] = []
         for receipt in receipts:
             rid = receipt.get("id")
-            text = receipt.get("ocr_text") or ""
+            text = receipt.get("ocr_text") or receipt.get("raw_text") or ""
             if not rid or not text:
                 continue
 
@@ -992,9 +1175,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 filename=receipt.get("filename") or "",
                 overwrite=overwrite,
             )
-
-            if not updates:
-                continue
+            updates = dict(updates or {})
 
             if "store_name" in updates:
                 updates["store_name"] = data.storage.resolve_store_alias(
@@ -1012,14 +1193,53 @@ def _register_services(hass: HomeAssistant) -> None:
                 if canonical:
                     updates["store_name"] = canonical
 
+            _apply_auto_receipt_type(updates, receipt, entry=entry)
+            _apply_auto_receipt_subcategories(updates, receipt)
+            line_items_changed = False
+            # Drop no-op updates so activity/reprocessing only reflects real changes.
+            for key in (
+                "total",
+                "purchased_at",
+                "store_name",
+                "store_entity_id",
+                "receipt_type",
+                "receipt_type_source",
+                "receipt_subcategory",
+                "grocery_subcategories",
+            ):
+                if key in updates and updates.get(key) == receipt.get(key):
+                    updates.pop(key, None)
+            if "line_items_raw" in updates:
+                current_items = receipt.get("line_items_raw") or []
+                if updates.get("line_items_raw") == current_items:
+                    updates.pop("line_items_raw", None)
+                else:
+                    line_items_changed = True
+            reprocess_needed = False
+            if line_items_changed:
+                reprocess_needed = True
+            elif ("store_name" in updates or "purchased_at" in updates) and (
+                updates.get("line_items_raw")
+                if "line_items_raw" in updates
+                else receipt.get("line_items_raw")
+            ):
+                # Store/date changes affect derived observations even when line-items are unchanged.
+                reprocess_needed = True
+            if not updates:
+                continue
             await data.storage.async_update_receipt(rid, updates)
+            if reprocess_needed:
+                line_items_reprocess_ids.append(rid)
             updated += 1
 
         if updated:
+            reprocessed = 0
+            if line_items_reprocess_ids:
+                reprocessed = await data.storage.async_reprocess_receipt_ids(line_items_reprocess_ids)
             await data.activity.async_add_activity(
                 kind="receipts_reparsed",
                 description=f"Re-parsed receipts ({updated})",
-                payload={"receipt_id": receipt_id, "count": updated},
+                payload={"receipt_id": receipt_id, "count": updated, "reprocessed": reprocessed},
             )
             data.request_refresh()
 
@@ -1532,8 +1752,8 @@ def _register_services(hass: HomeAssistant) -> None:
     _reg(SERVICE_SCAN_RECEIPTS_INBOX, handle_scan, vol.Schema({}))
 
     _reg(
-        SERVICE_RUN_OCR,
-        handle_run_ocr,
+        SERVICE_RUN_EXTRACTION,
+        handle_run_extraction,
         vol.Schema(
             {
                 vol.Optional("receipt_id"): cv.string,
@@ -1631,7 +1851,7 @@ def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_UNDO_ACTIVITY)
     hass.services.async_remove(DOMAIN, SERVICE_REPROCESS_RECEIPTS)
     hass.services.async_remove(DOMAIN, SERVICE_SCAN_RECEIPTS_INBOX)
-    hass.services.async_remove(DOMAIN, SERVICE_RUN_OCR)
+    hass.services.async_remove(DOMAIN, SERVICE_RUN_EXTRACTION)
     hass.services.async_remove(DOMAIN, SERVICE_REPARSE_RECEIPTS)
     hass.services.async_remove(DOMAIN, SERVICE_CLEAR_ALL_DATA)
     hass.services.async_remove(DOMAIN, SERVICE_RUN_AUTO_SHOPPING)
@@ -2044,6 +2264,7 @@ async def _async_ingest_receipt_bytes(
             ocr_text=None,
             custom_hints=_custom_eating_out_hints(entry),
         ),
+        receipt_type_source=RECEIPT_TYPE_SOURCE_AUTO,
         raw_text=None,
         currency=None,
         line_items=None,
@@ -2072,17 +2293,13 @@ async def _async_ingest_receipt_bytes(
         payload={"receipt_id": receipt["id"], "filename": os.path.basename(dest), "source": "telegram"},
     )
 
-    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
     await data.storage.async_update_receipt(
         receipt["id"],
         {"extract_status": "queued", "extract_queued_at": dt_util.now().isoformat()},
     )
-    if extractor_mode == "llm":
-        hass.async_create_task(
-            _async_run_llm_for_receipt_file(hass, entry, data, receipt, overwrite=False, force=True)
-        )
-    else:
-        hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
+    hass.async_create_task(
+        _async_run_llm_for_receipt_file(hass, entry, data, receipt, overwrite=False, force=True)
+    )
     data.request_refresh()
     return receipt["id"], dest, False
 
@@ -2344,6 +2561,7 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
                 ocr_text=None,
                 custom_hints=_custom_eating_out_hints(entry),
             ),
+            receipt_type_source=RECEIPT_TYPE_SOURCE_AUTO,
             raw_text=None,
             currency=None,
             line_items=None,
@@ -2393,39 +2611,10 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
     # Best-effort cleanup of old archived files.
     await hass.async_add_executor_job(_cleanup_archive_sync, archive_path, ttl_days)
 
-    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
-    if extractor_mode == "llm":
-        receipts = await data.storage.async_list_receipts()
-        queued_any = False
-        for receipt in receipts:
-            if receipt.get("file_path") and receipt.get("extract_status") in {"pending", "failed"}:
-                rid = receipt.get("id")
-                if rid:
-                    await data.storage.async_update_receipt(
-                        rid,
-                        {
-                            "extract_status": "queued",
-                            "extract_queued_at": dt_util.now().isoformat(),
-                        },
-                    )
-                    queued_any = True
-                hass.async_create_task(
-                    _async_run_llm_for_receipt_file(
-                        hass, entry, data, receipt, overwrite=False, force=False
-                    )
-                )
-        if queued_any:
-            data.request_refresh()
-        return
-
-    endpoint = entry.options.get(CONF_OCR_ENDPOINT_URL, DEFAULT_OCR_ENDPOINT_URL)
-    if not endpoint:
-        return
-
     receipts = await data.storage.async_list_receipts()
     queued_any = False
     for receipt in receipts:
-        if receipt.get("file_path") and receipt.get("extract_status") == "pending":
+        if receipt.get("file_path") and receipt.get("extract_status") in {"pending", "failed"}:
             rid = receipt.get("id")
             if rid:
                 await data.storage.async_update_receipt(
@@ -2436,7 +2625,11 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
                     },
                 )
                 queued_any = True
-            hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, receipt))
+            hass.async_create_task(
+                _async_run_llm_for_receipt_file(
+                    hass, entry, data, receipt, overwrite=False, force=False
+                )
+            )
     if queued_any:
         data.request_refresh()
 
@@ -2585,36 +2778,21 @@ async def _async_reset_stuck_receipts(
             },
         )
 
-    # Re-trigger processing immediately.
-    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
-    if extractor_mode == "llm":
-        receipts = await data.storage.async_list_receipts()
-        for r in receipts:
-            if r.get("id") in set(to_reset):
-                await data.storage.async_update_receipt(
-                    r["id"],
-                    {
-                        "extract_status": "queued",
-                        "extract_queued_at": dt_util.now().isoformat(),
-                    },
-                )
-                hass.async_create_task(
-                    _async_run_llm_for_receipt_file(hass, entry, data, r, overwrite=False, force=True)
-                )
-    else:
-        endpoint = entry.options.get(CONF_OCR_ENDPOINT_URL, DEFAULT_OCR_ENDPOINT_URL)
-        if endpoint:
-            receipts = await data.storage.async_list_receipts()
-            for r in receipts:
-                if r.get("id") in set(to_reset):
-                    await data.storage.async_update_receipt(
-                        r["id"],
-                        {
-                            "extract_status": "queued",
-                            "extract_queued_at": dt_util.now().isoformat(),
-                        },
-                    )
-                    hass.async_create_task(_async_run_ocr_for_receipt(hass, entry, data, r))
+    # Re-trigger processing immediately via the LLM extraction pipeline.
+    receipts = await data.storage.async_list_receipts()
+    reset_ids = set(to_reset)
+    for r in receipts:
+        if r.get("id") in reset_ids:
+            await data.storage.async_update_receipt(
+                r["id"],
+                {
+                    "extract_status": "queued",
+                    "extract_queued_at": dt_util.now().isoformat(),
+                },
+            )
+            hass.async_create_task(
+                _async_run_llm_for_receipt_file(hass, entry, data, r, overwrite=False, force=True)
+            )
 
     return len(to_reset)
 
@@ -2766,325 +2944,6 @@ async def _async_run_inventory_vision_for_image(
     await _async_maybe_notify_telegram_inventory_image(
         data, image_row=image_row, status="done", detected_rows=detected_rows
     )
-
-
-async def _async_run_ocr_for_receipt(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    data: GroceryIntelData,
-    receipt: dict[str, Any],
-) -> None:
-    receipt_id = receipt.get("id")
-    if not receipt_id:
-        return
-
-    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
-    if extractor_mode == "llm":
-        return
-
-    if receipt.get("extract_status") in {"done", "running"}:
-        return
-
-    file_path = receipt.get("file_path")
-    if not file_path:
-        await _async_mark_extract_failed(
-            data,
-            receipt,
-            "Missing receipt file path",
-        )
-        return
-
-    if not hass.config.is_allowed_path(file_path):
-        await _async_mark_extract_failed(
-            data,
-            receipt,
-            "Receipt file path not allowed",
-        )
-        return
-    if not await hass.async_add_executor_job(os.path.exists, file_path):
-        await _async_mark_extract_failed(data, receipt, "Receipt file missing")
-        return
-
-    endpoint = entry.options.get(CONF_OCR_ENDPOINT_URL, DEFAULT_OCR_ENDPOINT_URL)
-    language = entry.options.get(CONF_OCR_LANGUAGE, DEFAULT_OCR_LANGUAGE)
-    if not endpoint:
-        await _async_mark_extract_failed(data, receipt, "OCR endpoint URL not configured")
-        return
-
-    ocr_api_token = entry.options.get(CONF_OCR_API_TOKEN, DEFAULT_OCR_API_TOKEN) or ""
-    ocr_api_token_header = entry.options.get(
-        CONF_OCR_API_TOKEN_HEADER, DEFAULT_OCR_API_TOKEN_HEADER
-    )
-
-    t0 = time.perf_counter()
-    async with data.ocr_semaphore:
-        now_iso = dt_util.now().isoformat()
-        queue_delay_ms = _ms_between_iso(receipt.get("extract_queued_at"), now_iso)
-        await data.storage.async_update_receipt(
-            receipt_id,
-            {
-                "extract_status": "running",
-                "extract_started_at": now_iso,
-                "extract_method": "ocr",
-                "extract_provider": "ocr",
-                "extract_model": None,
-                "extract_queue_delay_ms": queue_delay_ms,
-            },
-        )
-        session = async_get_clientsession(hass)
-
-        async def _do_ocr_request() -> dict[str, Any]:
-            def _read_for_upload(path: str, fname: str) -> tuple[bytes, str]:
-                ext = os.path.splitext(fname)[1].lower()
-                if ext in HEIC_EXTENSIONS:
-                    converted = _convert_heic_to_jpeg_bytes_sync(path)
-                    if not converted:
-                        return b"", fname
-                    base = os.path.splitext(fname)[0]
-                    processed = _preprocess_receipt_image_bytes_sync(
-                        converted, filename=fname
-                    ) or converted
-                    return processed, f"{base}.jpg"
-                if ext in {".jpg", ".jpeg", ".png", ".webp"}:
-                    try:
-                        with open(path, "rb") as f:
-                            raw = f.read()
-                    except Exception:
-                        return b"", fname
-                    processed = _preprocess_receipt_image_bytes_sync(raw, filename=fname)
-                    if processed:
-                        base = os.path.splitext(fname)[0]
-                        return processed, f"{base}.jpg"
-                    return raw, fname
-                with open(path, "rb") as f:
-                    return f.read(), fname
-
-            filename = receipt.get("filename") or os.path.basename(file_path)
-            orig_ext = os.path.splitext(filename)[1].lower()
-            content, upload_filename = await hass.async_add_executor_job(
-                _read_for_upload, file_path, filename
-            )
-            if not content:
-                raise RuntimeError("Failed to read/convert receipt file")
-
-            # If we've preprocessed, it's always JPEG bytes.
-            upload_ext = os.path.splitext(upload_filename)[1].lower()
-            if upload_ext in {".jpg", ".jpeg"} and orig_ext in (
-                HEIC_EXTENSIONS | {".jpg", ".jpeg", ".png", ".webp"}
-            ):
-                content_type = "image/jpeg"
-                if not upload_filename.lower().endswith((".jpg", ".jpeg")):
-                    upload_filename = os.path.splitext(upload_filename)[0] + ".jpg"
-            else:
-                content_type = mimetypes.guess_type(upload_filename)[0] or "application/octet-stream"
-
-            headers = {
-                "Content-Type": content_type,
-                "X-Filename": upload_filename,
-                "X-OCR-Lang": language,
-            }
-            if ocr_api_token:
-                headers[str(ocr_api_token_header)] = str(ocr_api_token)
-
-            async with session.post(
-                endpoint,
-                timeout=aiohttp.ClientTimeout(total=120),
-                data=content,
-                headers=headers,
-            ) as response:
-                if response.status >= 400:
-                    raise aiohttp.ClientError(f"HTTP {response.status}")
-                payload = await response.json()
-
-            # If the OCR output likely missed the header (common for phone photos),
-            # run a lightweight second OCR pass on the cropped header region and
-            # prepend it so store/date extraction has better context.
-            if content_type == "image/jpeg" and orig_ext in (
-                HEIC_EXTENSIONS | {".jpg", ".jpeg", ".png", ".webp"}
-            ):
-                try:
-                    full_text = payload.get("text") if isinstance(payload, dict) else ""
-                    lines = [ln.strip() for ln in str(full_text or "").splitlines() if ln.strip()]
-                    first_line = lines[0] if lines else ""
-                    store_guess = _parse_store_from_text(str(full_text or ""), filename=filename) or ""
-                    low_store = store_guess.casefold()
-                    looks_like_slogan = any(
-                        kw in low_store
-                        for kw in ("affärsidé", "affarside", "welcome", "välkommen", "kvitto", "receipt")
-                    )
-                    if len(first_line) <= 3 or looks_like_slogan:
-                        header_bytes = await hass.async_add_executor_job(
-                            _crop_receipt_header_jpeg_bytes_sync, content
-                        )
-                        if header_bytes:
-                            header_headers = dict(headers)
-                            header_headers["X-Filename"] = f"header_{upload_filename}"
-                            async with session.post(
-                                endpoint,
-                                timeout=aiohttp.ClientTimeout(total=60),
-                                data=header_bytes,
-                                headers=header_headers,
-                            ) as hresp:
-                                if hresp.status < 400:
-                                    hpayload = await hresp.json()
-                                    htext = hpayload.get("text") if isinstance(hpayload, dict) else ""
-                                    if (
-                                        isinstance(htext, str)
-                                        and htext.strip()
-                                        and isinstance(payload, dict)
-                                    ):
-                                        # Only prepend header text if it looks plausible; otherwise it can
-                                        # pollute store parsing (e.g., random symbols from a bad crop).
-                                        sample = htext.strip()[:200]
-                                        non_ws = [ch for ch in sample if not ch.isspace()]
-                                        letters = sum(ch.isalpha() for ch in non_ws)
-                                        digits = sum(ch.isdigit() for ch in non_ws)
-                                        other = len(non_ws) - letters - digits
-                                        letter_ratio = letters / max(1, len(non_ws))
-                                        other_ratio = other / max(1, len(non_ws))
-                                        has_word = any(
-                                            len("".join(ch for ch in w if ch.isalpha())) >= 4
-                                            for w in sample.split()
-                                        )
-                                        if letters >= 10 and has_word and letter_ratio >= 0.30 and other_ratio <= 0.45:
-                                            payload["text"] = f"{htext.strip()}\n{full_text or ''}"
-                except Exception:
-                    # Best-effort only; never fail the main OCR request because of header OCR.
-                    pass
-
-            if not isinstance(payload, dict):
-                raise RuntimeError("OCR service returned invalid response")
-            return payload
-
-        try:
-            payload = await asyncio.wait_for(_do_ocr_request(), timeout=180)
-        except asyncio.TimeoutError:
-            _LOGGER.warning("OCR request timed out for %s", file_path)
-            await _async_mark_extract_failed(data, receipt, "OCR request timed out")
-            return
-        except Exception as err:
-            _LOGGER.warning("OCR request failed for %s: %s", file_path, err)
-            await _async_mark_extract_failed(data, receipt, "OCR request failed")
-            return
-
-    if not isinstance(payload, dict) or not payload.get("ok"):
-        await _async_mark_extract_failed(data, receipt, "OCR service returned failure")
-        return
-
-    text = payload.get("text") or ""
-    confidence = _normalize_confidence(payload.get("confidence"))
-
-    # Hybrid mode: if OCR output for a photo looks unusable, fall back to LLM vision
-    # so we don't persist nonsense store/date/total.
-    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
-    ext = os.path.splitext(receipt.get("filename") or os.path.basename(file_path))[1].lower()
-    if (
-        extractor_mode == "hybrid"
-        and ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
-        and _ocr_text_looks_low_quality(text)
-    ):
-        llm_provider = (entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or "").strip()
-        llm_model = (entry.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL) or "").strip()
-        if llm_provider.lower() == "ollama" and llm_model:
-            now_iso = dt_util.now().isoformat()
-            await data.storage.async_update_receipt(
-                receipt_id,
-                {
-                    "ocr_text": text,
-                    "ocr_confidence": confidence,
-                    "extract_status": "queued",
-                    "extract_started_at": None,
-                    "extract_queued_at": now_iso,
-                    "extract_finished_at": None,
-                    "extract_duration_ms": None,
-                    "extract_queue_delay_ms": None,
-                    "extract_method": "llm",
-                    "extract_provider": llm_provider.lower(),
-                    "extract_model": llm_model,
-                },
-            )
-            await data.activity.async_add_activity(
-                kind="ocr_low_quality_fallback",
-                description=f"OCR low quality; falling back to vision for {receipt.get('filename', 'receipt')}",
-                payload={"receipt_id": receipt_id, "filename": receipt.get("filename")},
-            )
-            hass.async_create_task(
-                _async_run_llm_for_receipt_file(
-                    hass,
-                    entry,
-                    data,
-                    {**receipt, "ocr_text": text, "ocr_confidence": confidence, "extract_status": "queued"},
-                    overwrite=False,
-                    force=True,
-                )
-            )
-            data.request_refresh()
-            return
-
-    duration_ms = int((time.perf_counter() - t0) * 1000)
-    finished_iso = dt_util.now().isoformat()
-    updates: dict[str, Any] = {
-        "ocr_text": text,
-        "ocr_confidence": confidence,
-        "extract_status": "done",
-        "extract_started_at": None,
-        "extract_queued_at": None,
-        "extract_finished_at": finished_iso,
-        "extract_duration_ms": duration_ms,
-    }
-
-    try:
-        extracted_updates = await _async_extract_receipt_fields(
-            hass=hass,
-            entry=entry,
-            receipt=receipt,
-            text=text,
-            filename=receipt.get("filename") or os.path.basename(file_path),
-            overwrite=False,
-        )
-        if "store_name" in extracted_updates:
-            extracted_updates["store_name"] = data.storage.resolve_store_alias(
-                _safe_str(extracted_updates.get("store_name"))
-            )
-        updates.update(extracted_updates)
-    except Exception as err:
-        _LOGGER.warning("Field extraction failed for %s: %s", file_path, err)
-        await data.activity.async_add_activity(
-            kind="extract_fields_failed",
-            description=f"Field extraction failed for {receipt.get('filename', 'receipt')}",
-            payload={"receipt_id": receipt_id, "filename": receipt.get("filename"), "reason": str(err)},
-        )
-
-    if updates.get("store_name"):
-        store_eid, canonical = await _async_assign_store_entity(
-            data,
-            store_name=updates.get("store_name"),
-            branch_name=None,
-            merchant_hints=None,
-        )
-        if store_eid:
-            updates["store_entity_id"] = store_eid
-        if canonical:
-            updates["store_name"] = canonical
-
-    _apply_auto_receipt_type(updates, receipt, entry=entry)
-    await data.storage.async_update_receipt(receipt_id, updates)
-    if "line_items_raw" in updates:
-        await data.storage.async_reprocess_receipts(receipt_id, 1)
-
-    await data.activity.async_add_activity(
-        kind="extract_text_completed",
-        description=f"Text extraction completed for {receipt.get('filename', 'receipt')}",
-        payload={"receipt_id": receipt_id, "filename": receipt.get("filename")},
-    )
-
-    # Best-effort: remove semantic duplicates (e.g., same receipt imported as both JPG and PDF).
-    if updates.get("extract_status") == "done":
-        await _async_semantic_dedupe_after_extract(hass, data=data, receipt_id=receipt_id)
-
-    # Receipt status changed to "done", so refresh analytics (includes processing counts).
-    data.request_refresh(delay=0.0)
-    await _async_maybe_notify_telegram_receipt(data, receipt_id=receipt_id, status="done")
 
 
 async def _async_run_llm_for_receipt_file(
@@ -3421,6 +3280,16 @@ async def _async_run_llm_for_receipt_file(
                         llm_receipt_type = _normalize_receipt_type(combined_fields.get("receipt_type"))
                         if llm_receipt_type is not None:
                             updates["receipt_type_llm"] = llm_receipt_type
+                        llm_receipt_subcategory = _sanitize_receipt_subcategory(
+                            combined_fields.get("receipt_subcategory")
+                        )
+                        if llm_receipt_subcategory is not None:
+                            updates["receipt_subcategory_llm"] = llm_receipt_subcategory
+                        llm_grocery_subcategories = _sanitize_grocery_subcategories(
+                            combined_fields.get("grocery_subcategories")
+                        )
+                        if llm_grocery_subcategories:
+                            updates["grocery_subcategories_llm"] = llm_grocery_subcategories
 
                         if overwrite or not (receipt.get("line_items_raw") or []):
                             items = _coerce_line_items(combined_fields.get("line_items"))
@@ -3447,6 +3316,7 @@ async def _async_run_llm_for_receipt_file(
                         )
 
                     _apply_auto_receipt_type(updates, receipt, entry=entry)
+                    _apply_auto_receipt_subcategories(updates, receipt)
                     await data.storage.async_update_receipt(receipt_id, updates)
                     if "line_items_raw" in updates:
                         await data.storage.async_reprocess_receipts(receipt_id, 1)
@@ -3500,6 +3370,7 @@ async def _async_run_llm_for_receipt_file(
                     if canonical:
                         updates["store_name"] = canonical
                 _apply_auto_receipt_type(updates, receipt, entry=entry)
+                _apply_auto_receipt_subcategories(updates, receipt)
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
                     await data.storage.async_reprocess_receipts(receipt_id, 1)
@@ -3713,6 +3584,16 @@ async def _async_run_llm_for_receipt_file(
                     llm_receipt_type = _normalize_receipt_type(combined_fields.get("receipt_type"))
                     if llm_receipt_type is not None:
                         updates["receipt_type_llm"] = llm_receipt_type
+                    llm_receipt_subcategory = _sanitize_receipt_subcategory(
+                        combined_fields.get("receipt_subcategory")
+                    )
+                    if llm_receipt_subcategory is not None:
+                        updates["receipt_subcategory_llm"] = llm_receipt_subcategory
+                    llm_grocery_subcategories = _sanitize_grocery_subcategories(
+                        combined_fields.get("grocery_subcategories")
+                    )
+                    if llm_grocery_subcategories:
+                        updates["grocery_subcategories_llm"] = llm_grocery_subcategories
 
                     if overwrite or not (receipt.get("line_items_raw") or []):
                         items = _coerce_line_items(combined_fields.get("line_items"))
@@ -3741,6 +3622,7 @@ async def _async_run_llm_for_receipt_file(
                     )
 
                 _apply_auto_receipt_type(updates, receipt, entry=entry)
+                _apply_auto_receipt_subcategories(updates, receipt)
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
                     await data.storage.async_reprocess_receipts(receipt_id, 1)
@@ -4130,6 +4012,7 @@ async def _async_mark_extract_failed(
         "ocr_confidence": None,
     }
     _apply_auto_receipt_type(updates, current or receipt, entry=_get_entry(data.hass))
+    _apply_auto_receipt_subcategories(updates, current or receipt)
     await data.storage.async_update_receipt(receipt_id, updates)
 
     await data.activity.async_add_activity(
@@ -4251,10 +4134,12 @@ def _sanitize_llm_fields(fields: dict[str, Any]) -> dict[str, Any]:
             dt = None
     cleaned["purchased_at"] = dt.isoformat() if dt is not None else None
     cleaned["receipt_type"] = _normalize_receipt_type(fields.get("receipt_type"))
+    cleaned["receipt_subcategory"] = _sanitize_receipt_subcategory(fields.get("receipt_subcategory"))
 
     # Line items: keep as-is (coercion happens later), but ensure list.
     li = fields.get("line_items")
     cleaned["line_items"] = li if isinstance(li, list) else (li if li is None else [])
+    cleaned["grocery_subcategories"] = _sanitize_grocery_subcategories(fields.get("grocery_subcategories"))
     return cleaned
 
 def _coerce_line_items(value: Any) -> list[dict[str, Any]]:
@@ -4526,7 +4411,9 @@ def _llm_system_prompt(
     base = (
         "Extract receipt fields. Return JSON only with keys: "
         "store_name (string|null), purchased_at (string|null, ISO 8601 date or datetime), "
-        "total (number|null), receipt_type (string|null: grocery|eating_out), line_items (array|null). "
+        "total (number|null), receipt_type (string|null: grocery|eating_out), "
+        "receipt_subcategory (string|null), grocery_subcategories (array|null), "
+        "line_items (array|null). "
         "Do not include any extra keys.\n\n"
         "Rules:\n"
         "- Do NOT guess. Only extract values you can clearly read from the receipt. If uncertain, use null.\n"
@@ -4539,11 +4426,17 @@ def _llm_system_prompt(
         "- store_name should come from the merchant header/logo line(s), not from street/city/address lines.\n"
         "- receipt_type should be 'eating_out' for restaurants/cafes/bars/takeaway/food-delivery receipts, "
         "otherwise 'grocery'. If uncertain, use null.\n"
+        "- receipt_subcategory is only for eating_out receipts (examples: restaurant, fast_food, cafe_coffee, "
+        "delivery_meal, bar_pub, takeout_pickup); otherwise use null.\n"
+        "- grocery_subcategories is only for grocery receipts and should be an array of {subcategory, total} "
+        "(examples: fresh_produce, dairy_eggs, meat_seafood, bakery, frozen, pantry, snacks_beverages, "
+        "household, personal_care, unclassified). Use [] if unknown.\n"
         "- line_items should be an array of objects with keys: raw_name (string), line_total (number), "
         "qty_raw (string|null), unit_price_raw (number|null). Use line_total as the total price for that line.\n"
         "- If you cannot extract line items, set line_items to an empty array [].\n"
         "- If the receipt is too blurry or unreadable, return "
-        "{\"store_name\": null, \"purchased_at\": null, \"total\": null, \"receipt_type\": null, \"line_items\": []}."
+        "{\"store_name\": null, \"purchased_at\": null, \"total\": null, \"receipt_type\": null, "
+        "\"receipt_subcategory\": null, \"grocery_subcategories\": [], \"line_items\": []}."
     )
     extra = (extra_instructions or "").strip()
     type_extra = (receipt_type_prompt or "").strip()
@@ -4650,6 +4543,44 @@ async def _async_llm_openai_extract(
             "purchased_at": {"type": ["string", "null"]},
             "total": {"type": ["number", "null"]},
             "receipt_type": {"type": ["string", "null"], "enum": ["grocery", "eating_out", None]},
+            "receipt_subcategory": {
+                "type": ["string", "null"],
+                "enum": [
+                    "restaurant",
+                    "fast_food",
+                    "cafe_coffee",
+                    "delivery_meal",
+                    "bar_pub",
+                    "takeout_pickup",
+                    None,
+                ],
+            },
+            "grocery_subcategories": {
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "subcategory": {
+                            "type": "string",
+                            "enum": [
+                                "fresh_produce",
+                                "dairy_eggs",
+                                "meat_seafood",
+                                "bakery",
+                                "frozen",
+                                "pantry",
+                                "snacks_beverages",
+                                "household",
+                                "personal_care",
+                                "unclassified",
+                            ],
+                        },
+                        "total": {"type": "number"},
+                    },
+                    "required": ["subcategory", "total"],
+                },
+            },
             "line_items": {
                 "type": ["array", "null"],
                 "items": {
@@ -4667,7 +4598,15 @@ async def _async_llm_openai_extract(
             },
         },
         # OpenAI's strict json_schema requires required to include every key in properties.
-        "required": ["store_name", "purchased_at", "total", "receipt_type", "line_items"],
+        "required": [
+            "store_name",
+            "purchased_at",
+            "total",
+            "receipt_type",
+            "receipt_subcategory",
+            "grocery_subcategories",
+            "line_items",
+        ],
     }
 
     payload = {
@@ -4730,6 +4669,44 @@ async def _async_llm_openai_vision_extract(
             "purchased_at": {"type": ["string", "null"]},
             "total": {"type": ["number", "null"]},
             "receipt_type": {"type": ["string", "null"], "enum": ["grocery", "eating_out", None]},
+            "receipt_subcategory": {
+                "type": ["string", "null"],
+                "enum": [
+                    "restaurant",
+                    "fast_food",
+                    "cafe_coffee",
+                    "delivery_meal",
+                    "bar_pub",
+                    "takeout_pickup",
+                    None,
+                ],
+            },
+            "grocery_subcategories": {
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "subcategory": {
+                            "type": "string",
+                            "enum": [
+                                "fresh_produce",
+                                "dairy_eggs",
+                                "meat_seafood",
+                                "bakery",
+                                "frozen",
+                                "pantry",
+                                "snacks_beverages",
+                                "household",
+                                "personal_care",
+                                "unclassified",
+                            ],
+                        },
+                        "total": {"type": "number"},
+                    },
+                    "required": ["subcategory", "total"],
+                },
+            },
             "line_items": {
                 "type": ["array", "null"],
                 "items": {
@@ -4747,7 +4724,15 @@ async def _async_llm_openai_vision_extract(
             },
         },
         # OpenAI's strict json_schema requires required to include every key in properties.
-        "required": ["store_name", "purchased_at", "total", "receipt_type", "line_items"],
+        "required": [
+            "store_name",
+            "purchased_at",
+            "total",
+            "receipt_type",
+            "receipt_subcategory",
+            "grocery_subcategories",
+            "line_items",
+        ],
     }
 
     data_url = f"data:{image_mime};base64,{image_b64}"
@@ -5073,7 +5058,6 @@ async def _async_extract_receipt_fields(
     updates: dict[str, Any] = {}
     profile = get_locale_profile(hass)
 
-    extractor_mode = entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
     llm_provider = entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or ""
     llm_model = entry.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL) or ""
     llm_api_key = entry.options.get(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY) or ""
@@ -5096,117 +5080,22 @@ async def _async_extract_receipt_fields(
         existing = receipt.get("line_items_raw") or []
         return not existing
 
-    # Heuristic extraction (built-in)
-    if extractor_mode in {"heuristic", "hybrid"}:
-        parsed_total = _parse_total_from_text(text, profile=profile)
-        parsed_date = _parse_date_from_text(text, filename=filename, profile=profile)
-        parsed_store = _parse_store_from_text(text, filename=filename, profile=profile)
+    if not llm_provider or not llm_model:
+        _LOGGER.warning("LLM extraction requires llm_provider and llm_model")
+        return updates
 
-        if parsed_total is not None and should_set("total"):
-            updates["total"] = parsed_total
-        if parsed_date is not None and should_set("purchased_at"):
-            updates["purchased_at"] = parsed_date.isoformat()
-        if parsed_store and should_set("store_name"):
-            updates["store_name"] = parsed_store
-
-    # LLM extraction
-    needs_line_items = extractor_mode in {"llm", "hybrid"} and should_set_items()
-
-    needs_llm = extractor_mode == "llm" or needs_line_items or (
-        extractor_mode == "hybrid"
-        and (
-            (should_set("total") and "total" not in updates)
-            or (should_set("purchased_at") and "purchased_at" not in updates)
-            or (should_set("store_name") and "store_name" not in updates)
-        )
-    )
-
-    if needs_llm:
-        if not llm_provider or not llm_model:
-            _LOGGER.warning(
-                "Extractor mode=%s requires LLM provider+model; using heuristic-only",
-                extractor_mode,
-            )
-            return updates
-
-        llm_fields: dict[str, Any] = {}
-        provider = str(llm_provider).lower()
-        if provider == "openai":
-            base = llm_base_url or "https://api.openai.com"
-            if not llm_api_key:
-                _LOGGER.warning("LLM extractor (OpenAI) missing API key; skipping")
-            else:
-                try:
-                    llm_fields = await _async_llm_openai_extract(
-                        hass=hass,
-                        base_url=base,
-                        api_key=llm_api_key,
-                        model=llm_model,
-                        text=text,
-                        filename=filename,
-                        system_prompt=system_prompt,
-                    )
-                except Exception:
-                    llm_fields = {}
-        elif provider == "azure":
-            if not llm_base_url:
-                _LOGGER.warning("LLM extractor (Azure OpenAI) missing base URL; skipping")
-            elif not llm_api_key:
-                _LOGGER.warning("LLM extractor (Azure OpenAI) missing API key; skipping")
-            else:
-                try:
-                    llm_fields = await _async_llm_azure_extract(
-                        hass=hass,
-                        endpoint=llm_base_url,
-                        api_key=llm_api_key,
-                        deployment=llm_model,
-                        api_version=azure_api_version or DEFAULT_AZURE_API_VERSION,
-                        text=text,
-                        filename=filename,
-                        system_prompt=system_prompt,
-                    )
-                except Exception:
-                    llm_fields = {}
-        elif provider == "anthropic":
-            base = llm_base_url or "https://api.anthropic.com"
-            if not llm_api_key:
-                _LOGGER.warning("LLM extractor (Anthropic) missing API key; skipping")
-            else:
-                try:
-                    llm_fields = await _async_llm_anthropic_extract(
-                        hass=hass,
-                        base_url=base,
-                        api_key=llm_api_key,
-                        model=llm_model,
-                        text=text,
-                        filename=filename,
-                        system_prompt=system_prompt,
-                    )
-                except Exception:
-                    llm_fields = {}
-        elif provider == "google":
-            base = llm_base_url or "https://generativelanguage.googleapis.com"
-            if not llm_api_key:
-                _LOGGER.warning("LLM extractor (Google) missing API key; skipping")
-            else:
-                try:
-                    llm_fields = await _async_llm_google_extract(
-                        hass=hass,
-                        base_url=base,
-                        api_key=llm_api_key,
-                        model=llm_model,
-                        text=text,
-                        filename=filename,
-                        system_prompt=system_prompt,
-                    )
-                except Exception:
-                    llm_fields = {}
-        elif provider == "ollama":
-            base = llm_base_url or "http://host.docker.internal:11434"
+    llm_fields: dict[str, Any] = {}
+    provider = str(llm_provider).lower()
+    if provider == "openai":
+        base = llm_base_url or "https://api.openai.com"
+        if not llm_api_key:
+            _LOGGER.warning("LLM extractor (OpenAI) missing API key; skipping")
+        else:
             try:
-                llm_fields = await _async_llm_ollama_extract(
+                llm_fields = await _async_llm_openai_extract(
                     hass=hass,
                     base_url=base,
+                    api_key=llm_api_key,
                     model=llm_model,
                     text=text,
                     filename=filename,
@@ -5214,51 +5103,121 @@ async def _async_extract_receipt_fields(
                 )
             except Exception:
                 llm_fields = {}
+    elif provider == "azure":
+        if not llm_base_url:
+            _LOGGER.warning("LLM extractor (Azure OpenAI) missing base URL; skipping")
+        elif not llm_api_key:
+            _LOGGER.warning("LLM extractor (Azure OpenAI) missing API key; skipping")
         else:
-            _LOGGER.warning("Unknown LLM provider: %s", llm_provider)
+            try:
+                llm_fields = await _async_llm_azure_extract(
+                    hass=hass,
+                    endpoint=llm_base_url,
+                    api_key=llm_api_key,
+                    deployment=llm_model,
+                    api_version=azure_api_version or DEFAULT_AZURE_API_VERSION,
+                    text=text,
+                    filename=filename,
+                    system_prompt=system_prompt,
+                )
+            except Exception:
+                llm_fields = {}
+    elif provider == "anthropic":
+        base = llm_base_url or "https://api.anthropic.com"
+        if not llm_api_key:
+            _LOGGER.warning("LLM extractor (Anthropic) missing API key; skipping")
+        else:
+            try:
+                llm_fields = await _async_llm_anthropic_extract(
+                    hass=hass,
+                    base_url=base,
+                    api_key=llm_api_key,
+                    model=llm_model,
+                    text=text,
+                    filename=filename,
+                    system_prompt=system_prompt,
+                )
+            except Exception:
+                llm_fields = {}
+    elif provider == "google":
+        base = llm_base_url or "https://generativelanguage.googleapis.com"
+        if not llm_api_key:
+            _LOGGER.warning("LLM extractor (Google) missing API key; skipping")
+        else:
+            try:
+                llm_fields = await _async_llm_google_extract(
+                    hass=hass,
+                    base_url=base,
+                    api_key=llm_api_key,
+                    model=llm_model,
+                    text=text,
+                    filename=filename,
+                    system_prompt=system_prompt,
+                )
+            except Exception:
+                llm_fields = {}
+    elif provider == "ollama":
+        base = llm_base_url or "http://host.docker.internal:11434"
+        try:
+            llm_fields = await _async_llm_ollama_extract(
+                hass=hass,
+                base_url=base,
+                model=llm_model,
+                text=text,
+                filename=filename,
+                system_prompt=system_prompt,
+            )
+        except Exception:
+            llm_fields = {}
+    else:
+        _LOGGER.warning("Unknown LLM provider: %s", llm_provider)
 
-        llm_fields = _sanitize_llm_fields(llm_fields if isinstance(llm_fields, dict) else {})
+    llm_fields = _sanitize_llm_fields(llm_fields if isinstance(llm_fields, dict) else {})
 
-        if should_set("total") and "total" not in updates:
-            total_val = llm_fields.get("total")
-            if isinstance(total_val, (int, float)):
-                updates["total"] = float(total_val)
-        if should_set("purchased_at") and "purchased_at" not in updates:
-            purchased_val = _safe_str(llm_fields.get("purchased_at")) or ""
-            if purchased_val:
-                parsed_dt = _parse_date_from_text(purchased_val)
-                if parsed_dt is not None:
-                    updates["purchased_at"] = parsed_dt.isoformat()
-        if should_set("store_name") and "store_name" not in updates:
-            store_val = _safe_str(llm_fields.get("store_name"))
-            if store_val:
-                updates["store_name"] = store_val
-        llm_receipt_type = _normalize_receipt_type(llm_fields.get("receipt_type"))
-        if llm_receipt_type is not None:
-            updates["receipt_type_llm"] = llm_receipt_type
+    if should_set("total"):
+        total_val = llm_fields.get("total")
+        if isinstance(total_val, (int, float)):
+            updates["total"] = float(total_val)
+    if should_set("purchased_at"):
+        purchased_val = _safe_str(llm_fields.get("purchased_at")) or ""
+        if purchased_val:
+            parsed_dt = _parse_date_from_text(purchased_val)
+            if parsed_dt is not None:
+                updates["purchased_at"] = parsed_dt.isoformat()
+    if should_set("store_name"):
+        store_val = _safe_str(llm_fields.get("store_name"))
+        if store_val:
+            updates["store_name"] = store_val
+    llm_receipt_type = _normalize_receipt_type(llm_fields.get("receipt_type"))
+    if llm_receipt_type is not None:
+        updates["receipt_type_llm"] = llm_receipt_type
+    llm_receipt_subcategory = _sanitize_receipt_subcategory(llm_fields.get("receipt_subcategory"))
+    if llm_receipt_subcategory is not None:
+        updates["receipt_subcategory_llm"] = llm_receipt_subcategory
+    llm_grocery_subcategories = _sanitize_grocery_subcategories(llm_fields.get("grocery_subcategories"))
+    if llm_grocery_subcategories:
+        updates["grocery_subcategories_llm"] = llm_grocery_subcategories
 
-        # Fallback: if LLM didn't produce header fields, try heuristics on available text.
-        # This improves robustness for PDF text-layer parsing when the LLM endpoint is unavailable.
-        if extractor_mode == "llm":
-            if should_set("total") and "total" not in updates:
-                parsed_total = _parse_total_from_text(text, profile=profile)
-                if parsed_total is not None:
-                    updates["total"] = parsed_total
-            if should_set("purchased_at") and "purchased_at" not in updates:
-                parsed_date = _parse_date_from_text(text, profile=profile)
-                if parsed_date is not None:
-                    updates["purchased_at"] = parsed_date.isoformat()
-            if should_set("store_name") and "store_name" not in updates:
-                parsed_store = _parse_store_from_text(text, profile=profile)
-                if parsed_store:
-                    updates["store_name"] = parsed_store
+    # Fallback: if LLM didn't produce header fields, try heuristics on available text.
+    if should_set("total") and "total" not in updates:
+        parsed_total = _parse_total_from_text(text, profile=profile)
+        if parsed_total is not None:
+            updates["total"] = parsed_total
+    if should_set("purchased_at") and "purchased_at" not in updates:
+        parsed_date = _parse_date_from_text(text, profile=profile)
+        if parsed_date is not None:
+            updates["purchased_at"] = parsed_date.isoformat()
+    if should_set("store_name") and "store_name" not in updates:
+        parsed_store = _parse_store_from_text(text, profile=profile)
+        if parsed_store:
+            updates["store_name"] = parsed_store
 
-        if needs_line_items and should_set_items():
-            items = _coerce_line_items(llm_fields.get("line_items"))
-            if not items and text:
-                items = _heuristic_line_items_from_text(text)
-            if items:
-                updates["line_items_raw"] = items
+    if should_set_items():
+        items = _coerce_line_items(llm_fields.get("line_items"))
+        if not items and text:
+            items = _heuristic_line_items_from_text(text)
+        if items:
+            updates["line_items_raw"] = items
 
     if "store_name" in updates:
         updates["store_name"] = _normalize_store_name(_safe_str(updates.get("store_name")))

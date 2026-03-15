@@ -13,11 +13,6 @@ CONF_RECEIPTS_ARCHIVE_PATH = "receipts_archive_path"
 CONF_RECEIPTS_ARCHIVE_TTL_DAYS = "receipts_archive_ttl_days"
 CONF_INBOX_SCAN_INTERVAL_SEC = "inbox_scan_interval_sec"
 CONF_ON_SUCCESS = "on_success"
-CONF_OCR_ENDPOINT_URL = "ocr_endpoint_url"
-CONF_OCR_LANGUAGE = "ocr_language"
-CONF_OCR_API_TOKEN = "ocr_api_token"
-CONF_OCR_API_TOKEN_HEADER = "ocr_api_token_header"
-CONF_EXTRACTOR_MODE = "extractor_mode"
 CONF_LLM_PROVIDER = "llm_provider"
 CONF_LLM_MODEL = "llm_model"
 CONF_LLM_API_KEY = "llm_api_key"
@@ -56,11 +51,6 @@ DEFAULT_RECEIPTS_ARCHIVE_PATH = "/media/grocery_intel/receipts_archive"
 DEFAULT_RECEIPTS_ARCHIVE_TTL_DAYS = 30
 DEFAULT_INBOX_SCAN_INTERVAL_SEC = 300
 DEFAULT_ON_SUCCESS = "archive"
-DEFAULT_OCR_ENDPOINT_URL = ""
-DEFAULT_OCR_LANGUAGE = "eng"
-DEFAULT_OCR_API_TOKEN = ""
-DEFAULT_OCR_API_TOKEN_HEADER = "Authorization"
-DEFAULT_EXTRACTOR_MODE = "heuristic"
 DEFAULT_LLM_PROVIDER = ""
 DEFAULT_LLM_MODEL = ""
 DEFAULT_LLM_API_KEY = ""
@@ -92,7 +82,7 @@ SERVICE_ADD_RECEIPT = "add_receipt"
 SERVICE_UNDO_ACTIVITY = "undo_activity"
 SERVICE_REPROCESS_RECEIPTS = "reprocess_receipts"
 SERVICE_SCAN_RECEIPTS_INBOX = "scan_receipts_inbox"
-SERVICE_RUN_OCR = "run_ocr"
+SERVICE_RUN_EXTRACTION = "run_extraction"
 SERVICE_REPARSE_RECEIPTS = "reparse_receipts"
 SERVICE_CLEAR_ALL_DATA = "clear_all_data"
 SERVICE_UPDATE_RECEIPT = "update_receipt"
@@ -106,3 +96,24 @@ SERVICE_EXPORT_DATA = "export_data"
 SERVICE_DEDUPE_STORES = "dedupe_stores"
 
 SMALL_OVERPAY_FLOOR = 2.0
+
+GROCERY_SUBCATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "fresh_produce",
+        ("apple", "banana", "tomato", "lettuce", "onion", "potato", "avocado", "fruit", "vegetable"),
+    ),
+    ("dairy_eggs", ("milk", "yogurt", "yoghurt", "cheese", "butter", "cream", "egg")),
+    ("meat_seafood", ("chicken", "beef", "pork", "salmon", "fish", "shrimp", "meat", "bacon")),
+    ("bakery", ("bread", "bun", "bagel", "croissant", "pastry", "cake")),
+    ("frozen", ("frozen", "ice cream")),
+    ("pantry", ("rice", "pasta", "flour", "oil", "salt", "sugar", "beans", "lentil", "sauce", "spice")),
+    (
+        "snacks_beverages",
+        ("chips", "snack", "soda", "cola", "juice", "water", "coffee", "tea", "chocolate", "candy"),
+    ),
+    (
+        "household",
+        ("detergent", "dish", "soap", "cleaner", "toilet paper", "paper towel", "trash bag", "foil"),
+    ),
+    ("personal_care", ("shampoo", "conditioner", "toothpaste", "toothbrush", "deodorant", "lotion")),
+)

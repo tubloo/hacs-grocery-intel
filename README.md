@@ -8,18 +8,18 @@
 
 Local-first Home Assistant integration for tracking grocery receipts and spend totals.
 
-Grocery Intel is a local-first Home Assistant integration that turns grocery receipts and pantry/fridge photos into practical household insights. It automatically ingests receipts, extracts totals, dates, stores, and (when available) line items using OCR and/or LLMs, then builds analytics like spend trends, store comparisons, price changes, and a canonical list of the items you typically buy. For day-to-day usefulness, it maintains a probabilistic “inventory confidence” (not exact counts) and can suggest shopping list items based on purchase cadence and low-confidence signals. Every automated action is logged, explainable, and undoable, and all data is stored locally in Home Assistant.
+Grocery Intel is a local-first Home Assistant integration that turns grocery receipts and pantry/fridge photos into practical household insights. It automatically ingests receipts, extracts totals, dates, stores, and (when available) line items using LLMs, then builds analytics like spend trends, store comparisons, price changes, and a canonical list of the items you typically buy. For day-to-day usefulness, it maintains a probabilistic “inventory confidence” (not exact counts) and can suggest shopping list items based on purchase cadence and low-confidence signals. Every automated action is logged, explainable, and undoable, and all data is stored locally in Home Assistant.
 
 ## Privacy & Data Handling
 
 - Grocery Intel stores receipts and derived data locally in your Home Assistant storage (e.g., under `/config/.storage/`).
-- If you configure OCR, your receipt images/text may be sent to the OCR endpoint you specify. Choose an endpoint you trust.
+- If you configure an LLM provider, your receipt images/text may be sent to that provider. Choose a provider you trust.
 
 ## Disclaimer
 
 - This is an unofficial, community integration and is not affiliated with Home Assistant / Nabu Casa.
-- Receipt parsing/OCR and totals can be incomplete or incorrect. Use this as a convenience, not as financial or accounting advice.
-- You are responsible for securing your Home Assistant instance and any external services you configure (like OCR).
+- Receipt parsing and totals can be incomplete or incorrect. Use this as a convenience, not as financial or accounting advice.
+- You are responsible for securing your Home Assistant instance and any external services you configure (like an LLM endpoint).
 
 ## Installation
 
@@ -41,7 +41,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 ## Features
 - Receipt inbox ingestion (PDF/images)
 - Spend sensors (weekly/monthly) + basic price analytics
-- OCR and/or LLM-based field extraction (configurable)
+- LLM-based field extraction
 - Activity log with undo for supported actions
   - Undoing an auto-shopping run restores shopping-list edits and the run's per-product auto-add/store-tag state.
 - Daily auto-add to Home Assistant Shopping List (optional; can tag items like `Eggs @ Willys` when enough store/price history exists)
@@ -60,7 +60,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 ## Data model (high level)
 Grocery Intel stores its richer data in Home Assistant storage (`/config/.storage/grocery_intel.data`). Sensors are summaries over that data.
 
-- Receipts: one row per receipt (source file, `purchased_at`, `total`, `store_name`, optional `receipt_type` as `grocery`/`eating_out`, `extract_status`, timing fields, optional `content_hash`)
+- Receipts: one row per receipt (source file, `purchased_at`, `total`, `store_name`, optional `receipt_type` as `grocery`/`eating_out`, `receipt_type_source` as `auto`/`manual`, `receipt_subcategory` for eating-out receipts, `grocery_subcategories` for grocery receipts, `extract_status`, timing fields, optional `content_hash`)
 - Stores: canonical store entities (`store_entity_id`) used to group receipts even when names vary.
   - Matching prefers strong merchant hints when available (org/store ID/phone/address/postal/city).
   - If a receipt only yields a store/chain name (no hints), Grocery Intel reuses an existing matching store entity (by normalized `chain_name`/aliases) to avoid creating many empty duplicates.
@@ -80,6 +80,9 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_spend_30d`
 - `sensor.grocery_intel_avg_basket_30d`
 - `sensor.grocery_intel_receipt_count_30d` (may appear as `sensor.grocery_intel_receipts_30d` on older installs)
+- `sensor.grocery_intel_spend_by_type_30d`
+- `sensor.grocery_intel_spend_by_type_month`
+- `sensor.grocery_intel_grocery_subcategory_30d`
 - `sensor.grocery_intel_receipt_processing`
 - `sensor.grocery_intel_top_stores_30d`
 - `sensor.grocery_intel_recent_receipts`
@@ -97,6 +100,9 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_spend_30d`: rolling 30-day spend total.
 - `sensor.grocery_intel_avg_basket_30d`: average receipt total over the last 30 days.
 - `sensor.grocery_intel_receipt_count_30d`: receipt count over the last 30 days (entity_id may be `sensor.grocery_intel_receipts_30d` if it was created before the suggested id changed; use the one shown in your HA Entities list).
+- `sensor.grocery_intel_spend_by_type_30d`: last 30-day spend split by `receipt_type`; attributes include `grocery`, `eating_out`, `total`, and `receipt_count`.
+- `sensor.grocery_intel_spend_by_type_month`: current calendar-month spend split by `receipt_type`; attributes include `grocery`, `eating_out`, `total`, and `receipt_count`.
+- `sensor.grocery_intel_grocery_subcategory_30d`: 30-day grocery-only spend by stored grocery subcategories (with fallback inference for older receipts); attributes include `items`, `unclassified_total`, and reconciliation details.
 - `sensor.grocery_intel_receipt_processing`: pipeline health; state is the number of receipts in `pending+queued+running`, and attributes include `status_counts` and `timing` summaries (avg/median/p95 by method/provider).
 
 List-style sensors: the state is a count, and details are in the `items` attribute.
@@ -113,7 +119,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `grocery_intel.update_receipt`
 - `grocery_intel.undo_activity`
 - `grocery_intel.scan_receipts_inbox`
-- `grocery_intel.run_ocr` (also used to run LLM parsing in `llm` mode)
+- `grocery_intel.run_extraction`
 - `grocery_intel.reparse_receipts`
 - `grocery_intel.reprocess_receipts`
 - `grocery_intel.clear_all_data`
@@ -126,7 +132,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `grocery_intel.export_data`
 - `grocery_intel.dedupe_stores` (dry-run by default; merges duplicate store entities and updates receipts)
 
-`grocery_intel.add_receipt` and `grocery_intel.update_receipt` accept optional `receipt_type` (`grocery` or `eating_out`). If omitted on ingestion, Grocery Intel auto-detects a type from merchant/file/text hints and will promote a receipt to `eating_out` when strong restaurant/delivery signals are found.
+`grocery_intel.add_receipt` and `grocery_intel.update_receipt` accept optional `receipt_type` (`grocery` or `eating_out`). If omitted on ingestion, Grocery Intel auto-detects a type. Explicit `update_receipt.receipt_type` edits are treated as manual and protected from later automatic reclassification.
 
 ## Troubleshooting
 
@@ -137,17 +143,25 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
 
 ## Configuration
 - Add the integration via the Home Assistant UI.
-- Optional: set a currency symbol in the integration options.
-- Receipt extraction: use `Extractor mode` (default `heuristic`).
-  - `heuristic`: requires an OCR endpoint URL; built-in parsing extracts total/date/store.
-  - `llm`: parses receipts via an LLM.
-    - Images (`.jpg/.png/.webp/.heic/.heif`) are sent to a vision-capable LLM when `llm_provider=ollama` or `llm_provider=openai`.
-    - PDFs are parsed from their text layer (via `pypdf`). If the PDF has no text layer, you'll need to OCR/convert it outside Home Assistant (the integration avoids heavy native dependencies).
-    - The integration asks the LLM for `total`, `store_name`, `purchased_at`, and `line_items` (best-effort). For images/PDF-vision it will do a second “line items only” pass to improve extraction.
-  - `hybrid`: uses OCR + heuristics first, then LLM to fill missing fields (and attempt line item extraction).
+- Options wizard (7 steps):
+  1. `LLM Provider`: choose `openai`, `azure`, `google`, `anthropic`, or `ollama`.
+  2. `LLM Connection`: configure `llm_model` and provider-specific auth/URL fields.
+     - `openai/google/anthropic`: API key.
+     - `azure`: API key + base URL + Azure API version.
+     - `ollama`: base URL.
+  3. `LLM Prompting`: `LLM extra instructions`, `Receipt type LLM prompt`, and `Eating-out keywords`.
+  4. `Receipts`: inbox/archive paths, receipt archive retention, scan interval, and `on_success`.
+  5. `Inventory`: inventory image inbox/archive paths, retention, scan interval, evidence TTL.
+  6. `Automation`: shopping auto-add and Telegram options.
+  7. `Review`: currency/analytics/export settings and confirmation toggle.
+- Receipt extraction is LLM-only.
+  - Images (`.jpg/.png/.webp/.heic/.heif`) are sent to a vision-capable LLM when `llm_provider=ollama` or `llm_provider=openai`.
+  - PDFs are parsed from their text layer (via `pypdf`). If the PDF has no text layer, you'll need to OCR/convert it outside Home Assistant (the integration avoids heavy native dependencies).
+  - The integration asks the LLM for `total`, `store_name`, `purchased_at`, `receipt_type`, `receipt_subcategory`, `grocery_subcategories`, and `line_items` (best-effort). For images/PDF-vision it will do a second “line items only” pass to improve extraction.
 - Optional: `LLM extra instructions` lets you add fine-tuning instructions; the integration always enforces a JSON-only contract and appends your instructions.
 - Optional: `Receipt type LLM prompt` lets you add custom classification guidance specifically for `receipt_type` (`grocery` vs `eating_out`) when LLM extraction runs.
-- Optional: `Eating-out keywords` lets you add comma-separated keyword hints (brand/app/merchant terms) used by heuristic receipt-type detection.
+- Optional: `Eating-out keywords` lets you add comma-separated keyword hints (brand/app/merchant terms) used as guidance for receipt-type detection.
+- `reparse_receipts` works from stored receipt text (no file read), uses LLM parsing, and refreshes category/subcategory fields from the latest parsing logic.
 - Tip (Home Assistant in Docker): `.local` hostnames may not resolve; prefer an IP like `http://192.168.x.x:11434` for `LLM base URL`.
 - Recommended (privacy): use `/media` paths so receipts/photos are protected by Home Assistant authentication.
   - **Home Assistant OS / Supervised:** `/media` is available by default.
@@ -240,6 +254,9 @@ entities:
   - entity: sensor.grocery_intel_avg_basket_30d
   # Receipt count entity_id can be `sensor.grocery_intel_receipt_count_30d` or (older installs) `sensor.grocery_intel_receipts_30d`.
   - entity: sensor.grocery_intel_receipt_count_30d
+  - entity: sensor.grocery_intel_spend_by_type_30d
+  - entity: sensor.grocery_intel_spend_by_type_month
+  - entity: sensor.grocery_intel_grocery_subcategory_30d
   - entity: sensor.grocery_intel_receipt_processing
   - entity: sensor.grocery_intel_top_stores_30d
   - entity: sensor.grocery_intel_recent_receipts

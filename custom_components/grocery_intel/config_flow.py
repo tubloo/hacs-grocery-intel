@@ -19,11 +19,6 @@ from .const import (
     CONF_RECEIPTS_ARCHIVE_TTL_DAYS,
     CONF_INBOX_SCAN_INTERVAL_SEC,
     CONF_ON_SUCCESS,
-    CONF_OCR_ENDPOINT_URL,
-    CONF_OCR_LANGUAGE,
-    CONF_OCR_API_TOKEN,
-    CONF_OCR_API_TOKEN_HEADER,
-    CONF_EXTRACTOR_MODE,
     CONF_LLM_PROVIDER,
     CONF_LLM_MODEL,
     CONF_LLM_API_KEY,
@@ -57,11 +52,6 @@ from .const import (
     DEFAULT_RECEIPTS_ARCHIVE_TTL_DAYS,
     DEFAULT_INBOX_SCAN_INTERVAL_SEC,
     DEFAULT_ON_SUCCESS,
-    DEFAULT_OCR_ENDPOINT_URL,
-    DEFAULT_OCR_LANGUAGE,
-    DEFAULT_OCR_API_TOKEN,
-    DEFAULT_OCR_API_TOKEN_HEADER,
-    DEFAULT_EXTRACTOR_MODE,
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_API_KEY,
@@ -115,9 +105,6 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._entry = config_entry
         self._user_data: dict = {}
-        self._form_mode: str = str(
-            self._entry.options.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)
-        ).strip() or DEFAULT_EXTRACTOR_MODE
         self._wizard_stage: int = 0
         self._field_back = "wizard_back"
         self._field_confirm = "wizard_confirm"
@@ -128,13 +115,14 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             if self._wizard_stage > 0 and bool(user_input.get(self._field_back, False)):
                 self._wizard_stage -= 1
                 return self._show_wizard_form(errors)
+
             self._ingest_stage_input(self._wizard_stage, user_input)
             if self._wizard_stage == 0:
-                mode = str(self._opt_default(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)).strip()
-                self._form_mode = mode or DEFAULT_EXTRACTOR_MODE
-                self._wizard_stage = 1
+                errors = self._validate_provider_stage()
+                if not errors:
+                    self._wizard_stage = 1
             elif self._wizard_stage == 1:
-                errors = self._validate_extraction_stage()
+                errors = self._validate_connection_stage()
                 if not errors:
                     self._wizard_stage = 2
             elif self._wizard_stage == 2:
@@ -143,12 +131,15 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 self._wizard_stage = 4
             elif self._wizard_stage == 4:
                 self._wizard_stage = 5
+            elif self._wizard_stage == 5:
+                self._wizard_stage = 6
             else:
                 if not bool(user_input.get(self._field_confirm, False)):
                     errors["base"] = "review_confirm_required"
                     return self._show_wizard_form(errors)
                 merged = dict(self._entry.options)
                 merged.update(self._user_data)
+                merged = self._normalize_provider_options(merged)
                 return self.async_create_entry(title="", data=merged)
 
         return self._show_wizard_form(errors)
@@ -163,7 +154,7 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             return self.async_show_form(
                 **kwargs,
                 description_placeholders=self._stage_placeholders(),
-                last_step=(self._wizard_stage == 5),
+                last_step=(self._wizard_stage == 6),
             )
         except TypeError:
             # Older HA cores may not support newer async_show_form keyword args.
@@ -173,6 +164,21 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
         if key in self._user_data:
             return self._user_data.get(key)
         return self._entry.options.get(key, fallback)
+
+    def _normalize_provider_options(self, options: dict) -> dict:
+        """Keep provider-specific auth/endpoint fields explicit and non-stale."""
+        out = dict(options)
+        provider = str(out.get(CONF_LLM_PROVIDER, "")).strip().lower()
+
+        if provider != "azure":
+            out[CONF_AZURE_API_VERSION] = DEFAULT_AZURE_API_VERSION
+
+        if provider == "ollama":
+            out[CONF_LLM_API_KEY] = ""
+        elif provider in {"openai", "google", "anthropic"}:
+            out[CONF_LLM_BASE_URL] = ""
+
+        return out
 
     def _strip(self, key: str) -> None:
         if key not in self._user_data:
@@ -188,124 +194,80 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
         }
         self._user_data.update(filtered)
         if stage == 0:
-            mode = str(self._user_data.get(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)).strip()
-            self._user_data[CONF_EXTRACTOR_MODE] = mode or DEFAULT_EXTRACTOR_MODE
+            self._strip(CONF_LLM_PROVIDER)
             return
         if stage == 1:
             for key in (
-                CONF_OCR_ENDPOINT_URL,
-                CONF_OCR_API_TOKEN,
-                CONF_LLM_PROVIDER,
                 CONF_LLM_MODEL,
                 CONF_LLM_API_KEY,
                 CONF_LLM_BASE_URL,
-                CONF_LLM_EXTRA_INSTRUCTIONS,
-                CONF_RECEIPT_TYPE_LLM_PROMPT,
                 CONF_AZURE_API_VERSION,
             ):
                 self._strip(key)
-            if not self._user_data.get(CONF_AZURE_API_VERSION):
+            provider = str(self._opt_default(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)).strip().lower()
+            if provider == "azure" and not self._user_data.get(CONF_AZURE_API_VERSION):
                 self._user_data[CONF_AZURE_API_VERSION] = DEFAULT_AZURE_API_VERSION
             return
         if stage == 2:
             for key in (
-                CONF_RECEIPTS_INBOX_PATH,
-                CONF_RECEIPTS_ARCHIVE_PATH,
-                CONF_ON_SUCCESS,
+                CONF_LLM_EXTRA_INSTRUCTIONS,
+                CONF_RECEIPT_TYPE_LLM_PROMPT,
                 CONF_EATING_OUT_KEYWORDS,
             ):
                 self._strip(key)
             return
         if stage == 3:
             for key in (
+                CONF_RECEIPTS_INBOX_PATH,
+                CONF_RECEIPTS_ARCHIVE_PATH,
+                CONF_ON_SUCCESS,
+            ):
+                self._strip(key)
+            return
+        if stage == 4:
+            for key in (
                 CONF_INVENTORY_IMAGES_INBOX_PATH,
                 CONF_INVENTORY_IMAGES_ARCHIVE_PATH,
             ):
                 self._strip(key)
             return
-        if stage == 4:
+        if stage == 5:
             for key in (
                 CONF_TELEGRAM_BOT_TOKEN,
                 CONF_TELEGRAM_ALLOWED_CHAT_IDS,
             ):
                 self._strip(key)
             return
-        if stage == 5:
+        if stage == 6:
             for key in (
                 CONF_CURRENCY_SYMBOL,
                 CONF_EXPORTS_PATH,
             ):
                 self._strip(key)
 
-    def _validate_extraction_stage(self) -> dict[str, str]:
+    def _validate_provider_stage(self) -> dict[str, str]:
         errors: dict[str, str] = {}
-        mode = str(self._opt_default(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE)).strip()
-        ocr_url = str(self._opt_default(CONF_OCR_ENDPOINT_URL, DEFAULT_OCR_ENDPOINT_URL)).strip()
-        llm_provider = str(self._opt_default(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)).strip()
+        llm_provider = str(self._opt_default(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)).strip().lower()
+        if not llm_provider:
+            errors["base"] = "llm_provider_required"
+        return errors
+
+    def _validate_connection_stage(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        llm_provider = str(self._opt_default(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)).strip().lower()
         llm_model = str(self._opt_default(CONF_LLM_MODEL, DEFAULT_LLM_MODEL)).strip()
         llm_base_url = str(self._opt_default(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL)).strip()
 
-        if mode in {"heuristic", "hybrid"} and not ocr_url:
-            errors["base"] = "ocr_endpoint_required"
-        elif mode in {"llm", "hybrid"}:
-            if not llm_provider:
-                errors["base"] = "llm_provider_required"
-            elif not llm_model:
-                errors["base"] = "llm_model_required"
-            elif llm_provider in {"ollama", "azure"} and not llm_base_url:
-                errors["base"] = "llm_base_url_required"
+        if not llm_model:
+            errors["base"] = "llm_model_required"
+        elif llm_provider in {"ollama", "azure"} and not llm_base_url:
+            errors["base"] = "llm_base_url_required"
         return errors
 
     def _build_schema_for_stage(self, stage: int) -> vol.Schema:
         fields: dict = {}
-        mode = str(self._opt_default(CONF_EXTRACTOR_MODE, self._form_mode)).strip() or DEFAULT_EXTRACTOR_MODE
 
         if stage == 0:
-            fields[
-                vol.Optional(
-                    CONF_EXTRACTOR_MODE,
-                    default=self._opt_default(CONF_EXTRACTOR_MODE, DEFAULT_EXTRACTOR_MODE),
-                )
-            ] = selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["heuristic", "llm", "hybrid"],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            )
-            return vol.Schema(fields)
-
-        if stage == 1:
-            fields[
-                vol.Optional(
-                    CONF_OCR_ENDPOINT_URL,
-                    default=self._opt_default(CONF_OCR_ENDPOINT_URL, DEFAULT_OCR_ENDPOINT_URL),
-                )
-            ] = str
-            fields[
-                vol.Optional(
-                    CONF_OCR_LANGUAGE,
-                    default=self._opt_default(CONF_OCR_LANGUAGE, DEFAULT_OCR_LANGUAGE),
-                )
-            ] = str
-            fields[
-                vol.Optional(
-                    CONF_OCR_API_TOKEN,
-                    default=self._opt_default(CONF_OCR_API_TOKEN, DEFAULT_OCR_API_TOKEN),
-                )
-            ] = str
-            fields[
-                vol.Optional(
-                    CONF_OCR_API_TOKEN_HEADER,
-                    default=self._opt_default(
-                        CONF_OCR_API_TOKEN_HEADER, DEFAULT_OCR_API_TOKEN_HEADER
-                    ),
-                )
-            ] = selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["Authorization", "X-API-Key", "api-key"],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            )
             fields[
                 vol.Optional(
                     CONF_LLM_PROVIDER,
@@ -323,26 +285,46 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             )
+            return vol.Schema(fields)
+
+        if stage == 1:
+            provider = str(self._opt_default(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)).strip().lower()
+            needs_api_key = provider in {"openai", "azure", "google", "anthropic"}
+            needs_base_url = provider in {"ollama", "azure"}
+
             fields[
                 vol.Optional(
                     CONF_LLM_MODEL,
                     default=self._opt_default(CONF_LLM_MODEL, DEFAULT_LLM_MODEL),
                 )
             ] = str
-            fields[
-                vol.Optional(
-                    CONF_LLM_API_KEY,
-                    default=self._opt_default(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY),
+            if needs_api_key:
+                fields[
+                    vol.Optional(
+                        CONF_LLM_API_KEY,
+                        default=self._opt_default(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY),
+                    )
+                ] = selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 )
-            ] = selector.TextSelector(
-                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-            )
-            fields[
-                vol.Optional(
-                    CONF_LLM_BASE_URL,
-                    default=self._opt_default(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL),
-                )
-            ] = str
+            if needs_base_url:
+                fields[
+                    vol.Optional(
+                        CONF_LLM_BASE_URL,
+                        default=self._opt_default(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL),
+                    )
+                ] = str
+            if provider == "azure":
+                fields[
+                    vol.Optional(
+                        CONF_AZURE_API_VERSION,
+                        default=self._opt_default(CONF_AZURE_API_VERSION, DEFAULT_AZURE_API_VERSION),
+                    )
+                ] = str
+            fields[vol.Optional(self._field_back, default=False)] = selector.BooleanSelector()
+            return vol.Schema(fields)
+
+        if stage == 2:
             fields[
                 vol.Optional(
                     CONF_LLM_EXTRA_INSTRUCTIONS,
@@ -365,14 +347,14 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             )
             fields[
                 vol.Optional(
-                    CONF_AZURE_API_VERSION,
-                    default=self._opt_default(CONF_AZURE_API_VERSION, DEFAULT_AZURE_API_VERSION),
+                    CONF_EATING_OUT_KEYWORDS,
+                    default=self._opt_default(CONF_EATING_OUT_KEYWORDS, DEFAULT_EATING_OUT_KEYWORDS),
                 )
             ] = str
             fields[vol.Optional(self._field_back, default=False)] = selector.BooleanSelector()
             return vol.Schema(fields)
 
-        if stage == 2:
+        if stage == 3:
             fields[
                 vol.Optional(
                     CONF_RECEIPTS_INBOX_PATH,
@@ -421,16 +403,10 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                     default=self._opt_default(CONF_ON_SUCCESS, DEFAULT_ON_SUCCESS),
                 )
             ] = str
-            fields[
-                vol.Optional(
-                    CONF_EATING_OUT_KEYWORDS,
-                    default=self._opt_default(CONF_EATING_OUT_KEYWORDS, DEFAULT_EATING_OUT_KEYWORDS),
-                )
-            ] = str
             fields[vol.Optional(self._field_back, default=False)] = selector.BooleanSelector()
             return vol.Schema(fields)
 
-        if stage == 3:
+        if stage == 4:
             fields[
                 vol.Optional(
                     CONF_INVENTORY_IMAGES_INBOX_PATH,
@@ -498,7 +474,7 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             fields[vol.Optional(self._field_back, default=False)] = selector.BooleanSelector()
             return vol.Schema(fields)
 
-        if stage == 4:
+        if stage == 5:
             fields[
                 vol.Optional(
                     CONF_SHOPPING_AUTO_APPROVE_ENABLED,
@@ -613,15 +589,16 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
 
     def _stage_placeholders(self) -> dict[str, str]:
         labels = {
-            0: "Mode",
-            1: "Extraction",
-            2: "Receipts",
-            3: "Inventory",
-            4: "Automation",
-            5: "Review",
+            0: "LLM Provider",
+            1: "LLM Connection",
+            2: "LLM Prompting",
+            3: "Receipts",
+            4: "Inventory",
+            5: "Automation",
+            6: "Review",
         }
         current = int(self._wizard_stage) + 1
-        total = 6
+        total = 7
         return {
             "wizard_step_current": str(current),
             "wizard_step_total": str(total),
