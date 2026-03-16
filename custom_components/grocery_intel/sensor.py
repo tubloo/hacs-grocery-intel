@@ -55,8 +55,8 @@ class GroceryIntelDataSnapshot:
     top_increases: list[dict[str, Any]]
     overpaid_items: list[dict[str, Any]]
     best_store_items: list[dict[str, Any]]
-    spend_by_type_30d: dict[str, Any]
-    spend_by_type_month: dict[str, Any]
+    spend_by_category_30d: dict[str, Any]
+    spend_by_category_month: dict[str, Any]
     grocery_subcategory_30d: dict[str, Any]
 
 
@@ -97,8 +97,8 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             receipt_status_counts = dict(cached["receipt_status_counts"])
             receipt_processing_timing = dict(cached["receipt_processing_timing"])
             recent_receipts = list(cached["recent_receipts"])
-            spend_by_type_30d = dict(cached["spend_by_type_30d"])
-            spend_by_type_month = dict(cached["spend_by_type_month"])
+            spend_by_category_30d = dict(cached["spend_by_category_30d"])
+            spend_by_category_month = dict(cached["spend_by_category_month"])
             grocery_subcategory_30d = dict(cached["grocery_subcategory_30d"])
         else:
             receipts = await self._storage.async_list_receipts()
@@ -110,8 +110,8 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             receipt_status_counts = _compute_receipt_status_counts(receipts)
             receipt_processing_timing = _compute_receipt_processing_timing(receipts)
             recent_receipts = _compute_recent_receipts(receipts)
-            spend_by_type_30d = _compute_spend_by_type_30d(receipts)
-            spend_by_type_month = _compute_spend_by_type_month(receipts)
+            spend_by_category_30d = _compute_spend_by_category_30d(receipts)
+            spend_by_category_month = _compute_spend_by_category_month(receipts)
             line_items = None
             if _receipts_need_line_item_fallback(receipts):
                 line_items = await self._storage.async_list_line_items()
@@ -129,8 +129,8 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
                 "receipt_status_counts": receipt_status_counts,
                 "receipt_processing_timing": receipt_processing_timing,
                 "recent_receipts": recent_receipts,
-                "spend_by_type_30d": spend_by_type_30d,
-                "spend_by_type_month": spend_by_type_month,
+                "spend_by_category_30d": spend_by_category_30d,
+                "spend_by_category_month": spend_by_category_month,
                 "grocery_subcategory_30d": grocery_subcategory_30d,
             }
         recent_activities = _compute_recent_activities(activities)
@@ -196,8 +196,8 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             top_increases=increases,
             overpaid_items=overpaid,
             best_store_items=best_store,
-            spend_by_type_30d=spend_by_type_30d,
-            spend_by_type_month=spend_by_type_month,
+            spend_by_category_30d=spend_by_category_30d,
+            spend_by_category_month=spend_by_category_month,
             grocery_subcategory_30d=grocery_subcategory_30d,
         )
 
@@ -280,23 +280,23 @@ async def async_setup_entry(
             device_info,
             "receipt_count_30d",
         ),
-        GrocerySpendByTypeSensor(
+        GrocerySpendByCategorySensor(
             coordinator,
-            f"{DOMAIN}_spend_by_type_30d",
-            "Spend by type 30d",
-            "spend_by_type_30d",
+            f"{DOMAIN}_spend_by_category_30d",
+            "Spend by category 30d",
+            "spend_by_category_30d",
             device_info,
             currency,
-            "spend_by_type_30d",
+            "spend_by_category_30d",
         ),
-        GrocerySpendByTypeSensor(
+        GrocerySpendByCategorySensor(
             coordinator,
-            f"{DOMAIN}_spend_by_type_month",
-            "Spend by type month",
-            "spend_by_type_month",
+            f"{DOMAIN}_spend_by_category_month",
+            "Spend by category month",
+            "spend_by_category_month",
             device_info,
             currency,
-            "spend_by_type_month",
+            "spend_by_category_month",
         ),
         GrocerySubcategorySpendSensor(
             coordinator,
@@ -479,8 +479,8 @@ class GroceryAnalyticsSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorE
         return {"items": getattr(data, self._key)}
 
 
-class GrocerySpendByTypeSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntity):
-    """Spend split by receipt type."""
+class GrocerySpendByCategorySensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntity):
+    """Spend split by receipt category."""
 
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -799,7 +799,7 @@ def _compute_rolling_stats(
     return total_7, total_30, count_30, avg_basket, top_stores
 
 
-def _compute_spend_by_type_30d(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+def _compute_spend_by_category_30d(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     now = dt_util.as_local(dt_util.now())
     cutoff_30 = now - timedelta(days=30)
     grocery = 0.0
@@ -815,7 +815,7 @@ def _compute_spend_by_type_30d(receipts: list[dict[str, Any]]) -> dict[str, Any]
         if total_f is None:
             continue
         receipt_count += 1
-        if str(receipt.get("receipt_type") or "").strip().lower() == "eating_out":
+        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
             eating_out += total_f
         else:
             grocery += total_f
@@ -828,7 +828,7 @@ def _compute_spend_by_type_30d(receipts: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
-def _compute_spend_by_type_month(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+def _compute_spend_by_category_month(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     now = dt_util.as_local(dt_util.now())
     grocery = 0.0
     eating_out = 0.0
@@ -844,7 +844,7 @@ def _compute_spend_by_type_month(receipts: list[dict[str, Any]]) -> dict[str, An
         if total_f is None:
             continue
         receipt_count += 1
-        if str(receipt.get("receipt_type") or "").strip().lower() == "eating_out":
+        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
             eating_out += total_f
         else:
             grocery += total_f
@@ -871,14 +871,14 @@ def _receipts_need_line_item_fallback(receipts: list[dict[str, Any]]) -> bool:
     now = dt_util.as_local(dt_util.now())
     cutoff_30 = now - timedelta(days=30)
     for receipt in receipts:
-        if str(receipt.get("receipt_type") or "").strip().lower() == "eating_out":
+        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
             continue
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
         if dt is None or dt_util.as_local(dt) < cutoff_30:
             continue
         if _receipt_total(receipt) is None:
             continue
-        persisted = receipt.get("grocery_subcategories")
+        persisted = receipt.get("receipt_subcategories")
         if not (isinstance(persisted, list) and persisted):
             return True
     return False
@@ -903,7 +903,7 @@ def _compute_grocery_subcategory_30d(
     line_items_total = 0.0
     line_item_count = 0
     for receipt in receipts:
-        if str(receipt.get("receipt_type") or "").strip().lower() == "eating_out":
+        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
             continue
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
         if dt is None:
@@ -916,7 +916,7 @@ def _compute_grocery_subcategory_30d(
 
         receipt_count += 1
         total += receipt_total
-        persisted = receipt.get("grocery_subcategories")
+        persisted = receipt.get("receipt_subcategories")
         if isinstance(persisted, list) and persisted:
             persisted_total = 0.0
             used_any = False

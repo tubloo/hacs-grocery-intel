@@ -38,10 +38,10 @@ Guidelines:
 ### Receipt ingestion
 
 - Sources: manual service calls, file inbox scanning, Telegram intake (optional).
-- Optional receipt categorization: `receipt_type` (`grocery` or `eating_out`) can be set manually and is auto-detected from merchant/file/text hints.
-  - Manual `receipt_type` edits are persisted as `receipt_type_source=manual` and protected from automatic reclassification.
-  - Subcategories are persisted per receipt: `receipt_subcategory` (eating_out) and `grocery_subcategories` (grocery).
-- Detection customization: users can provide extra eating-out keywords and an optional receipt-type LLM prompt in options.
+- Optional receipt categorization: `receipt_category` (`grocery` or `eating_out`) can be set manually and is auto-detected from merchant/file/text hints.
+  - Manual `receipt_category` edits are persisted as `receipt_category_source=manual` and protected from automatic reclassification.
+  - Subcategories are persisted in one unified `receipt_subcategories` array (single-row for eating_out, multi-row for grocery).
+- Detection customization: users can provide extra eating-out keywords and an optional receipt-category LLM prompt in options.
 - Receipts inbox → archive:
   - Inbox: `/media/grocery_intel/receipts_inbox`
   - Archive: `/media/grocery_intel/receipts_archive`
@@ -61,7 +61,7 @@ Guidelines:
 ### Analytics, activities, and undo
 
 - Rich data stored in HA storage; sensors are summaries.
-- Spend analytics now include backend `receipt_type` splits (30d/month) and a grocery-subcategory 30d breakdown sensor that prefers persisted receipt subcategories (with fallback inference for legacy data).
+- Spend analytics now include backend `receipt_category` splits (30d/month) and a grocery-subcategory 30d breakdown sensor that prefers persisted receipt subcategories (with fallback inference for legacy data).
 - Automatic actions create an activity record; undo exists for supported actions and must be safe.
 
 ### Automated shopping list (v1)

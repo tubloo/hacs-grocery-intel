@@ -24,7 +24,7 @@ from .const import (
     CONF_LLM_API_KEY,
     CONF_LLM_BASE_URL,
     CONF_LLM_EXTRA_INSTRUCTIONS,
-    CONF_RECEIPT_TYPE_LLM_PROMPT,
+    CONF_RECEIPT_CATEGORY_LLM_PROMPT,
     CONF_EATING_OUT_KEYWORDS,
     CONF_AZURE_API_VERSION,
     CONF_SHOPPING_AUTO_APPROVE_ENABLED,
@@ -57,7 +57,7 @@ from .const import (
     DEFAULT_LLM_API_KEY,
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
-    DEFAULT_RECEIPT_TYPE_LLM_PROMPT,
+    DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT,
     DEFAULT_EATING_OUT_KEYWORDS,
     DEFAULT_AZURE_API_VERSION,
     DEFAULT_SHOPPING_AUTO_APPROVE_ENABLED,
@@ -209,7 +209,7 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
         if stage == 2:
             for key in (
                 CONF_LLM_EXTRA_INSTRUCTIONS,
-                CONF_RECEIPT_TYPE_LLM_PROMPT,
+                CONF_RECEIPT_CATEGORY_LLM_PROMPT,
                 CONF_EATING_OUT_KEYWORDS,
             ):
                 self._strip(key)
@@ -335,9 +335,9 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             )
             fields[
                 vol.Optional(
-                    CONF_RECEIPT_TYPE_LLM_PROMPT,
+                    CONF_RECEIPT_CATEGORY_LLM_PROMPT,
                     default=self._opt_default(
-                        CONF_RECEIPT_TYPE_LLM_PROMPT, DEFAULT_RECEIPT_TYPE_LLM_PROMPT
+                        CONF_RECEIPT_CATEGORY_LLM_PROMPT, DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT
                     ),
                 )
             ] = selector.TextSelector(

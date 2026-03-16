@@ -24,10 +24,9 @@ class Receipt:
     total: float | None
     purchased_at: str | None
     store_name: str | None
-    receipt_type: str | None
-    receipt_type_source: str | None
-    receipt_subcategory: str | None
-    grocery_subcategories: list[dict[str, Any]]
+    receipt_category: str | None
+    receipt_category_source: str | None
+    receipt_subcategories: list[dict[str, Any]]
     currency: str | None
     raw_text: str | None
     ocr_text: str | None
@@ -92,6 +91,40 @@ class ReceiptStorage:
             self._data.setdefault("store_aliases", {})
             self._data.setdefault("stores", {})
             for receipt in self._data["receipts"].values():
+                # Migrate legacy category/subcategory keys to the v6 schema.
+                if "receipt_category" not in receipt and "receipt_type" in receipt:
+                    receipt["receipt_category"] = receipt.get("receipt_type")
+                if "receipt_category_source" not in receipt and "receipt_type_source" in receipt:
+                    receipt["receipt_category_source"] = receipt.get("receipt_type_source")
+                if "receipt_subcategories" not in receipt:
+                    migrated_rows: list[dict[str, Any]] = []
+                    legacy_rows = receipt.get("grocery_subcategories")
+                    if isinstance(legacy_rows, list):
+                        for row in legacy_rows:
+                            if not isinstance(row, dict):
+                                continue
+                            subcategory = str(row.get("subcategory") or "").strip()
+                            try:
+                                total = float(row.get("total"))
+                            except Exception:
+                                total = 0.0
+                            if not subcategory or total <= 0:
+                                continue
+                            migrated_rows.append(
+                                {"subcategory": subcategory, "total": round(total, 2)}
+                            )
+                    legacy_single = str(receipt.get("receipt_subcategory") or "").strip()
+                    if legacy_single and not migrated_rows:
+                        try:
+                            receipt_total = float(receipt.get("total"))
+                        except Exception:
+                            receipt_total = 0.0
+                        if receipt_total > 0:
+                            migrated_rows.append(
+                                {"subcategory": legacy_single, "total": round(receipt_total, 2)}
+                            )
+                    receipt["receipt_subcategories"] = migrated_rows
+
                 receipt.setdefault("ocr_text", None)
                 receipt.setdefault("ocr_confidence", None)
                 receipt.setdefault("source_meta", {})
@@ -108,11 +141,15 @@ class ReceiptStorage:
                 receipt.setdefault("extract_provider", None)
                 receipt.setdefault("extract_model", None)
                 receipt.setdefault("store_entity_id", None)
-                receipt.setdefault("receipt_type", None)
-                receipt.setdefault("receipt_type_source", None)
-                receipt.setdefault("receipt_subcategory", None)
-                receipt.setdefault("grocery_subcategories", [])
+                receipt.setdefault("receipt_category", None)
+                receipt.setdefault("receipt_category_source", None)
+                receipt.setdefault("receipt_subcategories", [])
                 receipt.setdefault("content_hash", None)
+                # Remove superseded keys from in-memory state.
+                receipt.pop("receipt_type", None)
+                receipt.pop("receipt_type_source", None)
+                receipt.pop("receipt_subcategory", None)
+                receipt.pop("grocery_subcategories", None)
 
                 # Don't persist "queued" across restarts.
                 if receipt.get("extract_status") == "queued":
@@ -152,8 +189,8 @@ class ReceiptStorage:
         total: float | None,
         date_str: str | None,
         store: str | None,
-        receipt_type: str | None,
-        receipt_type_source: str | None,
+        receipt_category: str | None,
+        receipt_category_source: str | None,
         raw_text: str | None,
         currency: str | None,
         line_items: list[dict[str, Any]] | None,
@@ -172,10 +209,9 @@ class ReceiptStorage:
             "total": float(total) if total is not None else None,
             "purchased_at": purchased_at.isoformat() if purchased_at else None,
             "store_name": store,
-            "receipt_type": receipt_type,
-            "receipt_type_source": receipt_type_source,
-            "receipt_subcategory": None,
-            "grocery_subcategories": [],
+            "receipt_category": receipt_category,
+            "receipt_category_source": receipt_category_source,
+            "receipt_subcategories": [],
             "store_entity_id": None,
             "currency": currency,
             "raw_text": raw_text,

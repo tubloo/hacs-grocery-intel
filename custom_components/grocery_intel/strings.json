@@ -40,7 +40,7 @@
           "llm_api_key": "LLM API key (optional)",
           "llm_base_url": "LLM base URL (optional)",
           "llm_extra_instructions": "LLM extra instructions (optional)",
-          "receipt_type_llm_prompt": "Receipt type LLM prompt (optional)",
+          "receipt_category_llm_prompt": "Receipt category LLM prompt (optional)",
           "azure_api_version": "Azure API version",
           "eating_out_keywords": "Eating-out keywords (comma-separated, optional)",
           "shopping_auto_approve_enabled": "Auto-add shopping items (daily)",

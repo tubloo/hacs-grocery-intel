@@ -1,6 +1,6 @@
 add_receipt:
   name: Add receipt
-  description: Add a grocery receipt and update spend totals.
+  description: Add a receipt and update spend totals.
   fields:
     total:
       name: Total
@@ -23,8 +23,8 @@ add_receipt:
       required: false
       selector:
         text:
-    receipt_type:
-      name: Receipt type
+    receipt_category:
+      name: Receipt category
       description: Optional category (`grocery` or `eating_out`). If omitted, Grocery Intel auto-detects.
       required: false
       selector:
@@ -82,8 +82,8 @@ update_receipt:
       required: false
       selector:
         text:
-    receipt_type:
-      name: Receipt type
+    receipt_category:
+      name: Receipt category
       description: Category (`grocery` or `eating_out`). Set to empty to clear.
       required: false
       selector:
@@ -162,7 +162,7 @@ run_extraction:
 
 reparse_receipts:
   name: Re-parse receipts
-  description: Re-parse total/date/store/receipt_type/subcategories from stored receipt text for recent receipts (no file OCR). Uses LLM extraction and rebuilds derived line-item analytics when line items are updated.
+  description: Re-parse total/date/store/receipt_category/subcategories from stored receipt text for recent receipts (no file OCR). Uses LLM extraction and rebuilds derived line-item analytics when line items are updated.
   fields:
     receipt_id:
       name: Receipt ID
@@ -245,7 +245,7 @@ force_refresh:
 
 telegram_ingest:
   name: Telegram ingest
-  description: Ingest a Telegram attachment into Grocery Intel (receipt or inventory image), optionally auto-detecting type and sending feedback.
+  description: Ingest a Telegram attachment into Grocery Intel (receipt or inventory image), optionally auto-detecting category and sending feedback.
   fields:
     chat_id:
       name: Chat ID
