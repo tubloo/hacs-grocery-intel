@@ -175,8 +175,6 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
 
         if provider == "ollama":
             out[CONF_LLM_API_KEY] = ""
-        elif provider in {"openai", "google", "anthropic"}:
-            out[CONF_LLM_BASE_URL] = ""
 
         return out
 
@@ -290,7 +288,7 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
         if stage == 1:
             provider = str(self._opt_default(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)).strip().lower()
             needs_api_key = provider in {"openai", "azure", "google", "anthropic"}
-            needs_base_url = provider in {"ollama", "azure"}
+            supports_base_url = provider in {"ollama", "azure", "openai", "google", "anthropic"}
 
             fields[
                 vol.Optional(
@@ -307,7 +305,7 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                 ] = selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 )
-            if needs_base_url:
+            if supports_base_url:
                 fields[
                     vol.Optional(
                         CONF_LLM_BASE_URL,

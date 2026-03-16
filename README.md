@@ -146,7 +146,7 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
 - Options wizard (7 steps):
   1. `LLM Provider`: choose `openai`, `azure`, `google`, `anthropic`, or `ollama`.
   2. `LLM Connection`: configure `llm_model` and provider-specific auth/URL fields.
-     - `openai/google/anthropic`: API key.
+     - `openai/google/anthropic`: API key (+ optional base URL).
      - `azure`: API key + base URL + Azure API version.
      - `ollama`: base URL.
   3. `LLM Prompting`: `LLM extra instructions`, `Receipt type LLM prompt`, and `Eating-out keywords`.

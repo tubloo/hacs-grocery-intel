@@ -674,9 +674,16 @@ class GroceryIntelData:
     unsub_debounced_refresh: callable | None = None
     debounced_refresh_scheduled_at: float | None = None
     unsub_refresh_failsafe: callable | None = None
+    refresh_watchdog_task: asyncio.Task | None = None
 
     def request_refresh(self, *, delay: float = 0.25) -> None:
         """Debounce coordinator refreshes during bursty updates."""
+        def _cancel_watchdog() -> None:
+            task = self.refresh_watchdog_task
+            if task and not task.done():
+                task.cancel()
+            self.refresh_watchdog_task = None
+
         # Safety: if a scheduled debounced refresh gets "stuck" (callback never fires),
         # the integration will stop refreshing indefinitely. Detect and recover.
         if self.unsub_debounced_refresh:
@@ -688,6 +695,26 @@ class GroceryIntelData:
                 )
                 self.cancel_pending_refresh()
             else:
+                # Ensure a watchdog exists even when we coalesce additional writes.
+                if not self.refresh_watchdog_task or self.refresh_watchdog_task.done():
+                    expected_at = float(self.debounced_refresh_scheduled_at or time.time())
+
+                    async def _refresh_watchdog() -> None:
+                        try:
+                            await asyncio.sleep(max(15.0, float(delay) + 15.0))
+                            if not self.unsub_debounced_refresh:
+                                return
+                            if float(self.debounced_refresh_scheduled_at or 0.0) != expected_at:
+                                return
+                            _LOGGER.warning("Refresh watchdog forcing coordinator refresh")
+                            self.cancel_pending_refresh()
+                            await self.coordinator.async_refresh()
+                        except asyncio.CancelledError:
+                            return
+                        except Exception:
+                            _LOGGER.exception("Coordinator refresh failed (watchdog)")
+
+                    self.refresh_watchdog_task = self.hass.async_create_task(_refresh_watchdog())
                 return
 
         # Clear any existing failsafe so we only keep one timer per refresh burst.
@@ -705,6 +732,7 @@ class GroceryIntelData:
                     self.unsub_refresh_failsafe()
                 finally:
                     self.unsub_refresh_failsafe = None
+            _cancel_watchdog()
             try:
                 await self.coordinator.async_refresh()
             except Exception:
@@ -738,7 +766,31 @@ class GroceryIntelData:
             self.hass, max(12.0, float(delay) + 12.0), lambda now: self.hass.async_create_task(_do_failsafe(now))
         )
 
+        expected_at = float(self.debounced_refresh_scheduled_at or time.time())
+
+        async def _refresh_watchdog() -> None:
+            try:
+                await asyncio.sleep(max(15.0, float(delay) + 15.0))
+                if not self.unsub_debounced_refresh:
+                    return
+                if float(self.debounced_refresh_scheduled_at or 0.0) != expected_at:
+                    return
+                _LOGGER.warning("Refresh watchdog forcing coordinator refresh")
+                self.cancel_pending_refresh()
+                await self.coordinator.async_refresh()
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                _LOGGER.exception("Coordinator refresh failed (watchdog)")
+
+        _cancel_watchdog()
+        self.refresh_watchdog_task = self.hass.async_create_task(_refresh_watchdog())
+
     def cancel_pending_refresh(self) -> None:
+        task = self.refresh_watchdog_task
+        if task and not task.done():
+            task.cancel()
+        self.refresh_watchdog_task = None
         if self.unsub_debounced_refresh:
             try:
                 self.unsub_debounced_refresh()
