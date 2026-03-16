@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.0.18 (2026-03-16)
+
+- New period sensors for category-focused dashboards:
+  - `sensor.grocery_intel_grocery_week|month|ytd`
+  - `sensor.grocery_intel_dining_week|month|ytd`
+  - `sensor.grocery_intel_vice_week|month|ytd`
+- `Vice` is defined as alcohol subcategories plus `tobacco_nicotine` on grocery receipts.
+- Docs: updated `README.md` entity/sensor descriptions for the new period sensors.
+
 ## 1.0.17 (2026-03-16)
 
 - Sensors: `sensor.grocery_intel_recent_receipts` now includes `receipt_category` and `receipt_category_source` in each `items` row for dashboard accuracy.

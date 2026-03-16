@@ -83,6 +83,15 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_spend_by_category_30d`
 - `sensor.grocery_intel_spend_by_category_month`
 - `sensor.grocery_intel_grocery_subcategory_30d`
+- `sensor.grocery_intel_grocery_week`
+- `sensor.grocery_intel_grocery_month`
+- `sensor.grocery_intel_grocery_ytd`
+- `sensor.grocery_intel_dining_week`
+- `sensor.grocery_intel_dining_month`
+- `sensor.grocery_intel_dining_ytd`
+- `sensor.grocery_intel_vice_week`
+- `sensor.grocery_intel_vice_month`
+- `sensor.grocery_intel_vice_ytd`
 - `sensor.grocery_intel_receipt_processing`
 - `sensor.grocery_intel_top_stores_30d`
 - `sensor.grocery_intel_recent_receipts`
@@ -103,6 +112,15 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_spend_by_category_30d`: last 30-day spend split by `receipt_category`; attributes include `grocery`, `dining`, `total`, and `receipt_count`.
 - `sensor.grocery_intel_spend_by_category_month`: current calendar-month spend split by `receipt_category`; attributes include `grocery`, `dining`, `total`, and `receipt_count`.
 - `sensor.grocery_intel_grocery_subcategory_30d`: 30-day grocery-only spend by stored receipt subcategories; attributes include `items`, `unclassified_total`, and reconciliation details.
+- `sensor.grocery_intel_grocery_week`: current ISO-week grocery spend.
+- `sensor.grocery_intel_grocery_month`: current calendar-month grocery spend.
+- `sensor.grocery_intel_grocery_ytd`: calendar year-to-date grocery spend.
+- `sensor.grocery_intel_dining_week`: current ISO-week dining spend.
+- `sensor.grocery_intel_dining_month`: current calendar-month dining spend.
+- `sensor.grocery_intel_dining_ytd`: calendar year-to-date dining spend.
+- `sensor.grocery_intel_vice_week`: current ISO-week vice spend (sum of alcohol subcategories plus `tobacco_nicotine` on grocery receipts).
+- `sensor.grocery_intel_vice_month`: current calendar-month vice spend (sum of alcohol subcategories plus `tobacco_nicotine` on grocery receipts).
+- `sensor.grocery_intel_vice_ytd`: calendar year-to-date vice spend (sum of alcohol subcategories plus `tobacco_nicotine` on grocery receipts).
 - `sensor.grocery_intel_receipt_processing`: pipeline health; state is the number of receipts in `pending+queued+running`, and attributes include `status_counts` and `timing` summaries (avg/median/p95 by method/provider).
 
 List-style sensors: the state is a count, and details are in the `items` attribute.
