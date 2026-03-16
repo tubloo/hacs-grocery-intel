@@ -107,7 +107,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 
 List-style sensors: the state is a count, and details are in the `items` attribute.
 - `sensor.grocery_intel_top_stores_30d`: top stores by spend (last 30 days, up to 10).
-- `sensor.grocery_intel_recent_receipts`: latest receipts (up to 20: `receipt_id`, `purchased_at`, `store_name`, `total`, `filename`).
+- `sensor.grocery_intel_recent_receipts`: latest receipts (up to 20: `receipt_id`, `purchased_at`, `store_name`, `total`, `filename`, `receipt_category`, `receipt_category_source`).
 - `sensor.grocery_intel_recent_activities`: recent activity log (up to 25, payload is compacted to fit HA attribute limits).
 - `sensor.grocery_intel_inventory_recently_seen`: inventory evidence from vision (up to 100: `product`, `last_seen_at`, `expires_at`, `confidence`).
 - `sensor.grocery_intel_top_price_increases`: largest increases by median unit price (up to 10; requires line-item observations).

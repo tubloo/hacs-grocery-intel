@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.0.17 (2026-03-16)
+
+- Sensors: `sensor.grocery_intel_recent_receipts` now includes `receipt_category` and `receipt_category_source` in each `items` row for dashboard accuracy.
+- Docs: updated `README.md` to document the expanded `recent_receipts` payload.
+- Agent docs: added explicit SemVer-based release numbering strategy to `AGENTS.md`.
+
 ## 1.0.16 (2026-03-16)
 
 - Receipt categories: renamed `eating_out` to `dining` across services/docs/sensors, with storage migration for legacy values.

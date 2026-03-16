@@ -957,6 +957,8 @@ def _compute_recent_receipts(receipts: list[dict[str, Any]]) -> list[dict[str, A
                 "store_name": r.get("store_name"),
                 "total": r.get("total"),
                 "filename": r.get("filename"),
+                "receipt_category": r.get("receipt_category"),
+                "receipt_category_source": r.get("receipt_category_source"),
             }
         )
     rows.sort(key=lambda x: x.get("purchased_at") or "", reverse=True)

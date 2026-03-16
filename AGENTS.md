@@ -106,3 +106,19 @@ Guidelines:
   - Request confirmation immediately before running any tagging/release commands.
   - Update documentation as needed (at minimum `README.md`, `custom_components/grocery_intel/services.yaml`, and `AGENTS.md`).
   - Provide a crisp summary of what changed (user-facing + developer-facing).
+
+## Release numbering strategy
+
+Use Semantic Versioning (`MAJOR.MINOR.PATCH`) with the current repo convention (`1.0.x`):
+
+- `PATCH`:
+  - Backward-compatible fixes/improvements.
+  - Prompt/schema tuning, sensor payload additions, migrations that preserve compatibility.
+- `MINOR`:
+  - Backward-compatible feature additions (new service capabilities, significant new workflows/entities).
+- `MAJOR`:
+  - Breaking changes that require user dashboard/automation/config updates or incompatible model changes.
+
+Guidance:
+- Prefer compatibility aliases/migrations where practical to avoid MAJOR bumps.
+- If a breaking change is unavoidable, call it out clearly in `CHANGELOG.md` with concrete migration notes.
