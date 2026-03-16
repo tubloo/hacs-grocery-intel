@@ -25,13 +25,13 @@ add_receipt:
         text:
     receipt_category:
       name: Receipt category
-      description: Optional category (`grocery` or `eating_out`). If omitted, Grocery Intel auto-detects.
+      description: Optional category (`grocery` or `dining`). If omitted, Grocery Intel auto-detects.
       required: false
       selector:
         select:
           options:
             - grocery
-            - eating_out
+            - dining
     raw_text:
       name: Raw text
       description: Raw receipt text.
@@ -84,7 +84,7 @@ update_receipt:
         text:
     receipt_category:
       name: Receipt category
-      description: Category (`grocery` or `eating_out`). Set to empty to clear.
+      description: Category (`grocery` or `dining`). Set to empty to clear.
       required: false
       selector:
         text:

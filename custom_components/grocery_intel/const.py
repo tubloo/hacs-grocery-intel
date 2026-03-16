@@ -19,7 +19,6 @@ CONF_LLM_API_KEY = "llm_api_key"
 CONF_LLM_BASE_URL = "llm_base_url"
 CONF_LLM_EXTRA_INSTRUCTIONS = "llm_extra_instructions"
 CONF_RECEIPT_CATEGORY_LLM_PROMPT = "receipt_category_llm_prompt"
-CONF_EATING_OUT_KEYWORDS = "eating_out_keywords"
 CONF_AZURE_API_VERSION = "azure_api_version"
 
 CONF_SHOPPING_AUTO_APPROVE_ENABLED = "shopping_auto_approve_enabled"
@@ -57,7 +56,6 @@ DEFAULT_LLM_API_KEY = ""
 DEFAULT_LLM_BASE_URL = ""
 DEFAULT_LLM_EXTRA_INSTRUCTIONS = ""
 DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT = ""
-DEFAULT_EATING_OUT_KEYWORDS = ""
 DEFAULT_AZURE_API_VERSION = "2024-06-01"
 
 DEFAULT_SHOPPING_AUTO_APPROVE_ENABLED = True
@@ -102,7 +100,8 @@ GROCERY_SUBCATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "fresh_produce",
         ("apple", "banana", "tomato", "lettuce", "onion", "potato", "avocado", "fruit", "vegetable"),
     ),
-    ("dairy_eggs", ("milk", "yogurt", "yoghurt", "cheese", "butter", "cream", "egg")),
+    ("dairy", ("milk", "yogurt", "yoghurt", "cheese", "butter", "cream")),
+    ("eggs", ("egg", "eggs")),
     ("meat_seafood", ("chicken", "beef", "pork", "salmon", "fish", "shrimp", "meat", "bacon")),
     ("bakery", ("bread", "bun", "bagel", "croissant", "pastry", "cake")),
     ("frozen", ("frozen", "ice cream")),
@@ -116,4 +115,14 @@ GROCERY_SUBCATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("detergent", "dish", "soap", "cleaner", "toilet paper", "paper towel", "trash bag", "foil"),
     ),
     ("personal_care", ("shampoo", "conditioner", "toothpaste", "toothbrush", "deodorant", "lotion")),
+    ("baby_child", ("diaper", "nappy", "formula", "baby food", "wipes")),
+    ("pet_care", ("dog food", "cat food", "pet food", "litter", "treats")),
+    ("pharmacy_health", ("vitamin", "supplement", "painkiller", "medicine", "bandage")),
+    ("ready_meals", ("ready meal", "prepared", "deli", "rotisserie", "meal kit")),
+    ("fees_deposits", ("deposit", "pant", "bottle deposit", "bag fee", "service fee")),
+    ("tobacco_nicotine", ("tobacco", "snus", "cigarette", "vape", "nicotine")),
+    ("alcohol_beer", ("beer", "lager", "ipa", "ale", "stout", "porter", "pilsner")),
+    ("alcohol_wine", ("wine", "red wine", "white wine", "rose", "prosecco", "champagne", "cava")),
+    ("alcohol_spirits", ("vodka", "gin", "whisky", "whiskey", "rum", "tequila", "cognac", "liqueur")),
+    ("alcohol_cider", ("cider",)),
 )

@@ -31,6 +31,7 @@ from .const import (
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
 )
+from .locale import get_locale_profile
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 HEIC_EXTENSIONS = {".heic", ".heif"}
@@ -378,7 +379,7 @@ def _normalize_detected_items(raw: Any) -> list[dict[str, Any]]:
     return items[:100]
 
 
-def _llm_inventory_system_prompt(extra: str = "") -> str:
+def _llm_inventory_system_prompt(extra: str = "", *, hass: Any | None = None) -> str:
     extra = (extra or "").strip()
     base = (
         "You are an assistant that analyzes a household inventory photo (fridge/pantry/cupboard). "
@@ -395,6 +396,29 @@ def _llm_inventory_system_prompt(extra: str = "") -> str:
         "- Avoid brand names, sizes, and counts unless very obvious.\n"
         "- confidence is between 0 and 1.\n"
     )
+    locale_lines: list[str] = []
+    if hass is not None:
+        lang = str(getattr(hass.config, "language", "") or "").strip()
+        country = str(getattr(hass.config, "country", "") or "").strip()
+        if lang:
+            locale_lines.append(f"- Home Assistant language: {lang}")
+        if country:
+            locale_lines.append(f"- Home country/region: {country}")
+        try:
+            profile = get_locale_profile(hass)
+        except Exception:
+            profile = None
+        if profile and profile.store_brand_hints:
+            locale_lines.append(
+                "- Common local stores/chains may appear in context: "
+                + ", ".join(profile.store_brand_hints[:10])
+            )
+    if locale_lines:
+        base += (
+            "\nLocale context:\n"
+            + "\n".join(locale_lines)
+            + "\n- Use locale context to interpret local-language item names and OCR variants.\n"
+        )
     if extra:
         base += "\nExtra instructions:\n" + extra + "\n"
     return base
@@ -418,7 +442,7 @@ async def async_analyze_inventory_image(
         return {}
 
     session = async_get_clientsession(hass)
-    system_prompt = _llm_inventory_system_prompt(llm_extra)
+    system_prompt = _llm_inventory_system_prompt(llm_extra, hass=hass)
 
     if provider == "ollama":
         base = llm_base_url or "http://host.docker.internal:11434"

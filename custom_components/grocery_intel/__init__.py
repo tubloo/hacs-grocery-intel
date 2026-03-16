@@ -62,7 +62,6 @@ from .const import (
     CONF_LLM_BASE_URL,
     CONF_LLM_EXTRA_INSTRUCTIONS,
     CONF_RECEIPT_CATEGORY_LLM_PROMPT,
-    CONF_EATING_OUT_KEYWORDS,
     CONF_AZURE_API_VERSION,
     DEFAULT_CURRENCY_SYMBOL,
     DEFAULT_RECEIPTS_INBOX_PATH,
@@ -76,7 +75,6 @@ from .const import (
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
     DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT,
-    DEFAULT_EATING_OUT_KEYWORDS,
     DEFAULT_AZURE_API_VERSION,
     SERVICE_ADD_RECEIPT,
     SERVICE_UNDO_ACTIVITY,
@@ -159,7 +157,7 @@ def _is_image_ext(ext: str) -> bool:
 
 
 RECEIPT_CATEGORY_GROCERY = "grocery"
-RECEIPT_CATEGORY_EATING_OUT = "eating_out"
+RECEIPT_CATEGORY_EATING_OUT = "dining"
 RECEIPT_CATEGORY_SOURCE_AUTO = "auto"
 RECEIPT_CATEGORY_SOURCE_MANUAL = "manual"
 
@@ -237,26 +235,15 @@ _EATING_OUT_SUBCATEGORY_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _ALLOWED_EATING_OUT_SUBCATEGORIES = {name for name, _ in _EATING_OUT_SUBCATEGORY_HINTS} | {"restaurant"}
 _ALLOWED_GROCERY_SUBCATEGORIES = {name for name, _ in GROCERY_SUBCATEGORY_KEYWORDS} | {"unclassified"}
 _ALLOWED_RECEIPT_SUBCATEGORIES = _ALLOWED_EATING_OUT_SUBCATEGORIES | _ALLOWED_GROCERY_SUBCATEGORIES
-
-
-def _custom_eating_out_hints(entry: ConfigEntry | None) -> tuple[str, ...]:
-    if entry is None:
-        return ()
-    raw = _safe_str(entry.options.get(CONF_EATING_OUT_KEYWORDS, DEFAULT_EATING_OUT_KEYWORDS))
-    if not raw:
-        return ()
-    out: list[str] = []
-    for part in raw.split(","):
-        p = part.strip().casefold()
-        if p:
-            out.append(p)
-    return tuple(dict.fromkeys(out))
+_SUBCATEGORY_ALIASES: dict[str, str] = {
+    "dairy_eggs": "dairy",
+}
 
 
 def _format_receipt_category(value: Any) -> str:
     normalized = _normalize_receipt_category(value)
     if normalized == RECEIPT_CATEGORY_EATING_OUT:
-        return "Eating out"
+        return "Dining"
     if normalized == RECEIPT_CATEGORY_GROCERY:
         return "Grocery"
     return "Unknown"
@@ -284,31 +271,24 @@ def _infer_receipt_category(
     filename: str | None,
     raw_text: str | None,
     ocr_text: str | None,
-    custom_hints: tuple[str, ...] = (),
     llm_receipt_category: str | None = None,
 ) -> str:
     llm_type = _normalize_receipt_category(llm_receipt_category)
     if llm_type is not None:
         return llm_type
 
-    extra_hints = tuple(h.casefold() for h in custom_hints if isinstance(h, str) and h.strip())
-    all_store_hints = _EATING_OUT_STORE_HINTS + extra_hints
-    all_text_hints = _EATING_OUT_TEXT_HINTS + extra_hints
-
     store_and_file = f"{_safe_str(store_name)} {_safe_str(filename)}".casefold()
-    if any(hint in store_and_file for hint in all_store_hints):
+    if any(hint in store_and_file for hint in _EATING_OUT_STORE_HINTS):
         return RECEIPT_CATEGORY_EATING_OUT
 
     text = f"{_safe_str(raw_text)} {_safe_str(ocr_text)}".casefold()
-    if any(hint in text for hint in all_text_hints):
+    if any(hint in text for hint in _EATING_OUT_TEXT_HINTS):
         return RECEIPT_CATEGORY_EATING_OUT
 
     return RECEIPT_CATEGORY_GROCERY
 
 
-def _apply_auto_receipt_category(
-    updates: dict[str, Any], receipt: dict[str, Any], *, entry: ConfigEntry | None = None
-) -> None:
+def _apply_auto_receipt_category(updates: dict[str, Any], receipt: dict[str, Any]) -> None:
     llm_candidate = _safe_str(updates.pop("receipt_category_llm", None))
     existing_source = _normalize_receipt_category_source(
         updates.get("receipt_category_source", receipt.get("receipt_category_source"))
@@ -333,7 +313,6 @@ def _apply_auto_receipt_category(
         filename=_safe_str(receipt.get("filename")),
         raw_text=_safe_str(updates.get("raw_text")) or _safe_str(receipt.get("raw_text")),
         ocr_text=_safe_str(updates.get("ocr_text")) or _safe_str(receipt.get("ocr_text")),
-        custom_hints=_custom_eating_out_hints(entry),
         llm_receipt_category=llm_candidate,
     )
     if existing != inferred or existing_source != RECEIPT_CATEGORY_SOURCE_AUTO:
@@ -341,68 +320,12 @@ def _apply_auto_receipt_category(
         updates["receipt_category_source"] = RECEIPT_CATEGORY_SOURCE_AUTO
 
 
-def _infer_eating_out_subcategory(
-    *, store_name: str | None, filename: str | None, raw_text: str | None, ocr_text: str | None
-) -> str:
-    text = f"{_safe_str(store_name)} {_safe_str(filename)} {_safe_str(raw_text)} {_safe_str(ocr_text)}".casefold()
-    for subcategory, hints in _EATING_OUT_SUBCATEGORY_HINTS:
-        if any(h in text for h in hints):
-            return subcategory
-    return "restaurant"
-
-
-def _infer_grocery_line_item_subcategory(raw_name: Any) -> str:
-    text = _safe_str(raw_name)
-    if not text:
-        return "unclassified"
-    low = text.casefold()
-    for subcategory, keywords in GROCERY_SUBCATEGORY_KEYWORDS:
-        if any(keyword in low for keyword in keywords):
-            return subcategory
-    return "unclassified"
-
-
-def _compute_receipt_subcategories(
-    line_items: list[dict[str, Any]], total: float | None
-) -> list[dict[str, Any]]:
-    totals: dict[str, float] = {}
-    line_sum = 0.0
-    for item in line_items:
-        try:
-            amount = float(item.get("line_total"))
-        except Exception:
-            amount = 0.0
-        if amount <= 0:
-            continue
-        line_sum += amount
-        sub = _infer_grocery_line_item_subcategory(item.get("raw_name"))
-        totals[sub] = totals.get(sub, 0.0) + amount
-
-    if total is not None:
-        try:
-            total_f = float(total)
-        except Exception:
-            total_f = None
-    else:
-        total_f = None
-    if total_f is not None and total_f > line_sum + 0.009:
-        remainder = total_f - line_sum
-        totals["unclassified"] = totals.get("unclassified", 0.0) + remainder
-
-    if not totals and total_f is not None and total_f > 0:
-        totals["unclassified"] = total_f
-
-    return [
-        {"subcategory": name, "total": round(float(amount), 2)}
-        for name, amount in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
-    ]
-
-
 def _sanitize_subcategory_name(value: Any) -> str | None:
     raw = _safe_str(value)
     if not raw:
         return None
     key = raw.casefold().strip().replace("-", "_").replace(" ", "_")
+    key = _SUBCATEGORY_ALIASES.get(key, key)
     return key if key in _ALLOWED_RECEIPT_SUBCATEGORIES else None
 
 
@@ -415,11 +338,8 @@ def _sanitize_receipt_subcategories(
     for row in value:
         if not isinstance(row, dict):
             continue
-        raw_name = _safe_str(row.get("subcategory"))
-        if not raw_name:
-            continue
-        name = raw_name.casefold().strip().replace("-", "_").replace(" ", "_")
-        if name not in _ALLOWED_RECEIPT_SUBCATEGORIES:
+        name = _sanitize_subcategory_name(row.get("subcategory"))
+        if not name:
             continue
         try:
             amount = float(row.get("total"))
@@ -452,77 +372,55 @@ def _apply_auto_receipt_subcategories(updates: dict[str, Any], receipt: dict[str
         receipt_category = _normalize_receipt_category(receipt.get("receipt_category"))
     llm_receipt_subcategories = _sanitize_receipt_subcategories(updates.pop("receipt_subcategories_llm", None))
 
+    total_raw = updates.get("total")
+    if total_raw is None:
+        total_raw = receipt.get("total")
+    try:
+        total = float(total_raw) if total_raw is not None else None
+    except Exception:
+        total = None
+
+    has_new_evidence = bool(llm_receipt_subcategories)
+    existing_rows = (
+        receipt.get("receipt_subcategories")
+        if isinstance(receipt.get("receipt_subcategories"), list)
+        else []
+    )
+    if not has_new_evidence and existing_rows and "receipt_category" not in updates:
+        _set_if_changed(
+            "receipt_subcategories",
+            _sanitize_receipt_subcategories(existing_rows, total=total),
+        )
+        return
+
     if receipt_category == RECEIPT_CATEGORY_EATING_OUT:
-        total_raw = updates.get("total")
-        if total_raw is None:
-            total_raw = receipt.get("total")
-        try:
-            total = float(total_raw) if total_raw is not None else None
-        except Exception:
-            total = None
-        eating_rows = [
+        rows = [
             row
-            for row in llm_receipt_subcategories
+            for row in _sanitize_receipt_subcategories(llm_receipt_subcategories, total=total)
             if str(row.get("subcategory") or "").strip() in _ALLOWED_EATING_OUT_SUBCATEGORIES
         ]
-        if eating_rows:
-            _set_if_changed("receipt_subcategories", eating_rows[:1])
+        if rows:
+            _set_if_changed("receipt_subcategories", rows[:1])
             return
-        inferred = _infer_eating_out_subcategory(
-            store_name=_safe_str(updates.get("store_name")) or _safe_str(receipt.get("store_name")),
-            filename=_safe_str(receipt.get("filename")),
-            raw_text=_safe_str(updates.get("raw_text")) or _safe_str(receipt.get("raw_text")),
-            ocr_text=_safe_str(updates.get("ocr_text")) or _safe_str(receipt.get("ocr_text")),
-        )
         if total is not None and total > 0:
-            _set_if_changed(
-                "receipt_subcategories",
-                [{"subcategory": inferred, "total": round(total, 2)}],
-            )
-        else:
-            _set_if_changed("receipt_subcategories", [])
+            _set_if_changed("receipt_subcategories", [{"subcategory": "unclassified", "total": round(total, 2)}])
+            return
+        _set_if_changed("receipt_subcategories", [])
         return
 
     if receipt_category == RECEIPT_CATEGORY_GROCERY:
-        line_items_raw = updates.get("line_items_raw")
-        if line_items_raw is None:
-            line_items_raw = receipt.get("line_items_raw") or []
-        if not isinstance(line_items_raw, list):
-            line_items_raw = []
-        total_raw = updates.get("total")
-        if total_raw is None:
-            total_raw = receipt.get("total")
-        try:
-            total = float(total_raw) if total_raw is not None else None
-        except Exception:
-            total = None
-        has_new_evidence = bool(llm_receipt_subcategories) or ("line_items_raw" in updates)
-        existing_rows = (
-            receipt.get("receipt_subcategories")
-            if isinstance(receipt.get("receipt_subcategories"), list)
-            else []
-        )
-        if not has_new_evidence and existing_rows and "receipt_category" not in updates:
-            _set_if_changed(
-                "receipt_subcategories",
-                _sanitize_receipt_subcategories(existing_rows, total=total),
-            )
+        rows = [
+            row
+            for row in _sanitize_receipt_subcategories(llm_receipt_subcategories, total=total)
+            if str(row.get("subcategory") or "").strip() in _ALLOWED_GROCERY_SUBCATEGORIES
+        ]
+        if rows:
+            _set_if_changed("receipt_subcategories", rows)
             return
-        if llm_receipt_subcategories:
-            rows = [
-                row
-                for row in _sanitize_receipt_subcategories(llm_receipt_subcategories, total=total)
-                if str(row.get("subcategory") or "").strip() in _ALLOWED_GROCERY_SUBCATEGORIES
-            ]
-        else:
-            rows = _compute_receipt_subcategories(
-                [i for i in line_items_raw if isinstance(i, dict)],
-                total,
-            )
-        _set_if_changed(
-            "receipt_subcategories",
-            rows,
-        )
+        if total is not None and total > 0:
+            _set_if_changed("receipt_subcategories", [{"subcategory": "unclassified", "total": round(total, 2)}])
+            return
+        _set_if_changed("receipt_subcategories", [])
         return
 
     _set_if_changed("receipt_subcategories", [])
@@ -940,7 +838,7 @@ def _register_services(hass: HomeAssistant) -> None:
             return ""
         normalized = _normalize_receipt_category(raw)
         if normalized is None:
-            raise vol.Invalid("receipt_category must be one of: grocery, eating_out")
+            raise vol.Invalid("receipt_category must be one of: grocery, dining")
         return normalized
 
     async def handle_add_receipt(call: ServiceCall) -> None:
@@ -977,7 +875,6 @@ def _register_services(hass: HomeAssistant) -> None:
                     filename=None,
                     raw_text=_safe_str(raw_text),
                     ocr_text=None,
-                    custom_hints=_custom_eating_out_hints(entry),
                 ),
                 raw_text=raw_text,
                 currency=currency,
@@ -1097,7 +994,7 @@ def _register_services(hass: HomeAssistant) -> None:
             if canonical:
                 updates["store_name"] = canonical
 
-        _apply_auto_receipt_category(updates, receipt, entry=_get_entry(hass))
+        _apply_auto_receipt_category(updates, receipt)
         _apply_auto_receipt_subcategories(updates, receipt)
         await data.storage.async_update_receipt(receipt_id, updates)
 
@@ -1263,7 +1160,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 if canonical:
                     updates["store_name"] = canonical
 
-            _apply_auto_receipt_category(updates, receipt, entry=entry)
+            _apply_auto_receipt_category(updates, receipt)
             _apply_auto_receipt_subcategories(updates, receipt)
             line_items_changed = False
             # Drop no-op updates so activity/reprocessing only reflects real changes.
@@ -2331,7 +2228,6 @@ async def _async_ingest_receipt_bytes(
             filename=os.path.basename(dest),
             raw_text=_safe_str(source_meta.get("caption")) if isinstance(source_meta, dict) else None,
             ocr_text=None,
-            custom_hints=_custom_eating_out_hints(entry),
         ),
         receipt_category_source=RECEIPT_CATEGORY_SOURCE_AUTO,
         raw_text=None,
@@ -2628,7 +2524,6 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
                 filename=record["filename"],
                 raw_text=None,
                 ocr_text=None,
-                custom_hints=_custom_eating_out_hints(entry),
             ),
             receipt_category_source=RECEIPT_CATEGORY_SOURCE_AUTO,
             raw_text=None,
@@ -3024,6 +2919,7 @@ async def _async_run_llm_for_receipt_file(
     overwrite: bool = False,
     force: bool = False,
 ) -> None:
+    profile = get_locale_profile(hass)
     receipt_id = receipt.get("id")
     if not receipt_id:
         return
@@ -3197,7 +3093,12 @@ async def _async_run_llm_for_receipt_file(
                             model=llm_model,
                             filename=filename,
                             image_b64=pdf_img_b64,
-                            system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
+                            system_prompt=_llm_system_prompt(
+                                str(llm_extra),
+                                str(llm_type_prompt),
+                                profile=profile,
+                                hass=hass,
+                            ),
                         )
                     elif provider == "openai":
                         base = llm_base_url or "https://api.openai.com"
@@ -3212,7 +3113,12 @@ async def _async_run_llm_for_receipt_file(
                             filename=filename,
                             image_b64=pdf_img_b64,
                             image_mime="image/png",
-                            system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
+                            system_prompt=_llm_system_prompt(
+                                str(llm_extra),
+                                str(llm_type_prompt),
+                                profile=profile,
+                                hass=hass,
+                            ),
                         )
                     else:
                         await _async_mark_extract_failed(
@@ -3379,7 +3285,7 @@ async def _async_run_llm_for_receipt_file(
                             payload={"receipt_id": receipt_id, "filename": filename},
                         )
 
-                    _apply_auto_receipt_category(updates, receipt, entry=entry)
+                    _apply_auto_receipt_category(updates, receipt)
                     _apply_auto_receipt_subcategories(updates, receipt)
                     await data.storage.async_update_receipt(receipt_id, updates)
                     if "line_items_raw" in updates:
@@ -3433,7 +3339,7 @@ async def _async_run_llm_for_receipt_file(
                         updates["store_entity_id"] = store_eid
                     if canonical:
                         updates["store_name"] = canonical
-                _apply_auto_receipt_category(updates, receipt, entry=entry)
+                _apply_auto_receipt_category(updates, receipt)
                 _apply_auto_receipt_subcategories(updates, receipt)
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
@@ -3480,7 +3386,12 @@ async def _async_run_llm_for_receipt_file(
                         model=llm_model,
                         filename=filename,
                         image_b64=img_b64,
-                        system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
+                        system_prompt=_llm_system_prompt(
+                            str(llm_extra),
+                            str(llm_type_prompt),
+                            profile=profile,
+                            hass=hass,
+                        ),
                     )
                 elif provider == "openai":
                     base = llm_base_url or "https://api.openai.com"
@@ -3495,7 +3406,12 @@ async def _async_run_llm_for_receipt_file(
                         filename=filename,
                         image_b64=img_b64,
                         image_mime=img_mime,
-                        system_prompt=_llm_system_prompt(str(llm_extra), str(llm_type_prompt)),
+                        system_prompt=_llm_system_prompt(
+                            str(llm_extra),
+                            str(llm_type_prompt),
+                            profile=profile,
+                            hass=hass,
+                        ),
                     )
                 else:
                     await _async_mark_extract_failed(
@@ -3680,7 +3596,7 @@ async def _async_run_llm_for_receipt_file(
                         payload={"receipt_id": receipt_id, "filename": filename},
                     )
 
-                _apply_auto_receipt_category(updates, receipt, entry=entry)
+                _apply_auto_receipt_category(updates, receipt)
                 _apply_auto_receipt_subcategories(updates, receipt)
                 await data.storage.async_update_receipt(receipt_id, updates)
                 if "line_items_raw" in updates:
@@ -4070,7 +3986,7 @@ async def _async_mark_extract_failed(
         "ocr_text": None,
         "ocr_confidence": None,
     }
-    _apply_auto_receipt_category(updates, current or receipt, entry=_get_entry(data.hass))
+    _apply_auto_receipt_category(updates, current or receipt)
     _apply_auto_receipt_subcategories(updates, current or receipt)
     await data.storage.async_update_receipt(receipt_id, updates)
 
@@ -4469,12 +4385,16 @@ def _heuristic_line_items_from_text(text: str) -> list[dict[str, Any]]:
 
 
 def _llm_system_prompt(
-    extra_instructions: str | None = None, receipt_category_prompt: str | None = None
+    extra_instructions: str | None = None,
+    receipt_category_prompt: str | None = None,
+    *,
+    profile: LocaleProfile | None = None,
+    hass: HomeAssistant | None = None,
 ) -> str:
     base = (
         "Extract receipt fields. Return JSON only with keys: "
         "store_name (string|null), purchased_at (string|null, ISO 8601 date or datetime), "
-        "total (number|null), receipt_category (string|null: grocery|eating_out), "
+        "total (number|null), receipt_category (string|null: grocery|dining), "
         "receipt_subcategories (array|null), "
         "line_items (array|null). "
         "Do not include any extra keys.\n\n"
@@ -4487,13 +4407,22 @@ def _llm_system_prompt(
         "- Only set purchased_at if the date/time is explicitly printed on the receipt.\n"
         "- store_name should be the merchant/store name (avoid generic words like 'kvitto'/'receipt').\n"
         "- store_name should come from the merchant header/logo line(s), not from street/city/address lines.\n"
-        "- receipt_category should be 'eating_out' for restaurants/cafes/bars/takeaway/food-delivery receipts, "
+        "- receipt_category should be 'dining' for restaurants/cafes/bars/takeaway/food-delivery receipts, "
         "otherwise 'grocery'. If uncertain, use null.\n"
         "- receipt_subcategories should be an array of {subcategory, total}.\n"
-        "- For eating_out receipts, return exactly one row using one of: restaurant, fast_food, cafe_coffee, "
+        "- For dining receipts, return exactly one row using one of: restaurant, fast_food, cafe_coffee, "
         "delivery_meal, bar_pub, takeout_pickup (total should match receipt total when known).\n"
-        "- For grocery receipts, return one or more rows using: fresh_produce, dairy_eggs, meat_seafood, bakery, "
-        "frozen, pantry, snacks_beverages, household, personal_care, unclassified.\n"
+        "- For grocery receipts, return one or more rows using: fresh_produce, dairy, eggs, meat_seafood, bakery, "
+        "frozen, pantry, snacks_beverages, household, personal_care, baby_child, pet_care, "
+        "pharmacy_health, ready_meals, fees_deposits, tobacco_nicotine, alcohol_beer, alcohol_wine, "
+        "alcohol_spirits, alcohol_cider, unclassified.\n"
+        "- Put alcoholic beverages into alcohol_beer, alcohol_wine, alcohol_spirits, or alcohol_cider.\n"
+        "- Use category semantics, not country-specific brand memorization. Brand names vary by region.\n"
+        "- For tobacco/nicotine wording (e.g., tobacco/tobak, cigarette/snus/vape/e-cig/nicotine sticks), "
+        "prefer tobacco_nicotine.\n"
+        "- Prefer filling known subcategories; use unclassified only for truly unknown residual amounts.\n"
+        "- If total is known, subcategory totals should add up to the receipt total (or be very close).\n"
+        "- Do not return an empty receipt_subcategories array when total is known; return at least one row.\n"
         "- line_items should be an array of objects with keys: raw_name (string), line_total (number), "
         "qty_raw (string|null), unit_price_raw (number|null). Use line_total as the total price for that line.\n"
         "- If you cannot extract line items, set line_items to an empty array [].\n"
@@ -4504,6 +4433,35 @@ def _llm_system_prompt(
     extra = (extra_instructions or "").strip()
     type_extra = (receipt_category_prompt or "").strip()
     sections = [base]
+    if profile or hass:
+        lang = ""
+        country = ""
+        currency = ""
+        timezone = ""
+        if hass:
+            lang = str(getattr(hass.config, "language", "") or "").strip()
+            country = str(getattr(hass.config, "country", "") or "").strip()
+            currency = str(getattr(hass.config, "currency", "") or "").strip()
+            timezone = str(getattr(hass.config, "time_zone", "") or "").strip()
+
+        locale_lines: list[str] = []
+        if lang:
+            locale_lines.append(f"- Home Assistant language: {lang}")
+        if country:
+            locale_lines.append(f"- Home country/region: {country}")
+        if currency:
+            locale_lines.append(f"- Home currency: {currency}")
+        if timezone:
+            locale_lines.append(f"- Home timezone: {timezone}")
+        if profile and profile.store_brand_hints:
+            brands = ", ".join(profile.store_brand_hints[:12])
+            locale_lines.append(f"- Common local chains/brands: {brands}")
+        if locale_lines:
+            locale_lines.append(
+                "- Use locale context to interpret abbreviations/spelling and to disambiguate items."
+            )
+            sections.append("Locale context:\n" + "\n".join(locale_lines))
+
     if extra:
         sections.append("User instructions:\n" + extra)
     if type_extra:
@@ -4605,7 +4563,7 @@ async def _async_llm_openai_extract(
             "store_name": {"type": ["string", "null"]},
             "purchased_at": {"type": ["string", "null"]},
             "total": {"type": ["number", "null"]},
-            "receipt_category": {"type": ["string", "null"], "enum": ["grocery", "eating_out", None]},
+            "receipt_category": {"type": ["string", "null"], "enum": ["grocery", "dining", None]},
             "receipt_subcategories": {
                 "type": ["array", "null"],
                 "items": {
@@ -4622,7 +4580,8 @@ async def _async_llm_openai_extract(
                                 "bar_pub",
                                 "takeout_pickup",
                                 "fresh_produce",
-                                "dairy_eggs",
+                                "dairy",
+                                "eggs",
                                 "meat_seafood",
                                 "bakery",
                                 "frozen",
@@ -4630,6 +4589,16 @@ async def _async_llm_openai_extract(
                                 "snacks_beverages",
                                 "household",
                                 "personal_care",
+                                "baby_child",
+                                "pet_care",
+                                "pharmacy_health",
+                                "ready_meals",
+                                "fees_deposits",
+                                "tobacco_nicotine",
+                                "alcohol_beer",
+                                "alcohol_wine",
+                                "alcohol_spirits",
+                                "alcohol_cider",
                                 "unclassified",
                             ],
                         },
@@ -4724,7 +4693,7 @@ async def _async_llm_openai_vision_extract(
             "store_name": {"type": ["string", "null"]},
             "purchased_at": {"type": ["string", "null"]},
             "total": {"type": ["number", "null"]},
-            "receipt_category": {"type": ["string", "null"], "enum": ["grocery", "eating_out", None]},
+            "receipt_category": {"type": ["string", "null"], "enum": ["grocery", "dining", None]},
             "receipt_subcategories": {
                 "type": ["array", "null"],
                 "items": {
@@ -4741,7 +4710,8 @@ async def _async_llm_openai_vision_extract(
                                 "bar_pub",
                                 "takeout_pickup",
                                 "fresh_produce",
-                                "dairy_eggs",
+                                "dairy",
+                                "eggs",
                                 "meat_seafood",
                                 "bakery",
                                 "frozen",
@@ -4749,6 +4719,16 @@ async def _async_llm_openai_vision_extract(
                                 "snacks_beverages",
                                 "household",
                                 "personal_care",
+                                "baby_child",
+                                "pet_care",
+                                "pharmacy_health",
+                                "ready_meals",
+                                "fees_deposits",
+                                "tobacco_nicotine",
+                                "alcohol_beer",
+                                "alcohol_wine",
+                                "alcohol_spirits",
+                                "alcohol_cider",
                                 "unclassified",
                             ],
                         },
@@ -5116,7 +5096,12 @@ async def _async_extract_receipt_fields(
     llm_receipt_category_prompt = (
         entry.options.get(CONF_RECEIPT_CATEGORY_LLM_PROMPT, DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT) or ""
     )
-    system_prompt = _llm_system_prompt(str(llm_extra), str(llm_receipt_category_prompt))
+    system_prompt = _llm_system_prompt(
+        str(llm_extra),
+        str(llm_receipt_category_prompt),
+        profile=profile,
+        hass=hass,
+    )
 
     def should_set(field: str) -> bool:
         if overwrite:

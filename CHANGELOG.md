@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.0.16 (2026-03-16)
+
+- Receipt categories: renamed `eating_out` to `dining` across services/docs/sensors, with storage migration for legacy values.
+- Prompting/options: removed `Eating-out keywords`; kept customization via `Receipt category LLM prompt`.
+- Subcategories: expanded grocery subcategory taxonomy (e.g., `baby_child`, `pet_care`, `pharmacy_health`, `ready_meals`, `fees_deposits`, `tobacco_nicotine`, `alcohol_*`) and split `dairy_eggs` into `dairy` + `eggs` (legacy alias kept).
+- Extraction prompts: improved receipt schema guidance and locale-aware context (HA language/country/currency/timezone + local chain hints) for text and vision receipt parsing.
+- Inventory vision: added locale context guidance to inventory-image prompting.
+- Analytics: grocery subcategory 30d sensor now relies on persisted receipt subcategories (legacy line-item fallback removed).
+
 ## 1.0.11 (2026-03-14)
 
 - Security/safety: sanitize ingest/archive filenames so Telegram or upload filename overrides cannot inject path components.

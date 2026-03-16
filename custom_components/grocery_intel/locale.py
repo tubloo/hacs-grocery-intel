@@ -37,6 +37,7 @@ class LocaleProfile:
     month_map: dict[str, int]
 
 
+
 def _base_month_map() -> dict[str, int]:
     # Common English (baseline). Locale packs extend this.
     return {

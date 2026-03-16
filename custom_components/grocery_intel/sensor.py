@@ -32,7 +32,6 @@ from .const import (
     DEFAULT_BEST_STORE_WINDOW_DAYS,
     DEFAULT_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
     SMALL_OVERPAY_FLOOR,
-    GROCERY_SUBCATEGORY_KEYWORDS,
 )
 from .storage import ReceiptStorage
 
@@ -112,10 +111,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             recent_receipts = _compute_recent_receipts(receipts)
             spend_by_category_30d = _compute_spend_by_category_30d(receipts)
             spend_by_category_month = _compute_spend_by_category_month(receipts)
-            line_items = None
-            if _receipts_need_line_item_fallback(receipts):
-                line_items = await self._storage.async_list_line_items()
-            grocery_subcategory_30d = _compute_grocery_subcategory_30d(receipts, line_items)
+            grocery_subcategory_30d = _compute_grocery_subcategory_30d(receipts)
             self._receipt_metrics_cache_key = cache_key
             self._receipt_metrics_cache = {
                 "week_total": week_total,
@@ -523,7 +519,7 @@ class GrocerySpendByCategorySensor(CoordinatorEntity[GrocerySpendCoordinator], S
             return None
         out = dict(payload)
         out["grocery"] = round(float(out.get("grocery", 0.0)), 2)
-        out["eating_out"] = round(float(out.get("eating_out", 0.0)), 2)
+        out["dining"] = round(float(out.get("dining", 0.0)), 2)
         out["total"] = round(float(out.get("total", 0.0)), 2)
         return out
 
@@ -803,7 +799,7 @@ def _compute_spend_by_category_30d(receipts: list[dict[str, Any]]) -> dict[str, 
     now = dt_util.as_local(dt_util.now())
     cutoff_30 = now - timedelta(days=30)
     grocery = 0.0
-    eating_out = 0.0
+    dining = 0.0
     receipt_count = 0
     for receipt in receipts:
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
@@ -815,15 +811,15 @@ def _compute_spend_by_category_30d(receipts: list[dict[str, Any]]) -> dict[str, 
         if total_f is None:
             continue
         receipt_count += 1
-        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
-            eating_out += total_f
+        if str(receipt.get("receipt_category") or "").strip().lower() == "dining":
+            dining += total_f
         else:
             grocery += total_f
     return {
         "window_days": 30,
         "grocery": grocery,
-        "eating_out": eating_out,
-        "total": grocery + eating_out,
+        "dining": dining,
+        "total": grocery + dining,
         "receipt_count": receipt_count,
     }
 
@@ -831,7 +827,7 @@ def _compute_spend_by_category_30d(receipts: list[dict[str, Any]]) -> dict[str, 
 def _compute_spend_by_category_month(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     now = dt_util.as_local(dt_util.now())
     grocery = 0.0
-    eating_out = 0.0
+    dining = 0.0
     receipt_count = 0
     for receipt in receipts:
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
@@ -844,57 +840,22 @@ def _compute_spend_by_category_month(receipts: list[dict[str, Any]]) -> dict[str
         if total_f is None:
             continue
         receipt_count += 1
-        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
-            eating_out += total_f
+        if str(receipt.get("receipt_category") or "").strip().lower() == "dining":
+            dining += total_f
         else:
             grocery += total_f
     return {
         "month": f"{now.year:04d}-{now.month:02d}",
         "grocery": grocery,
-        "eating_out": eating_out,
-        "total": grocery + eating_out,
+        "dining": dining,
+        "total": grocery + dining,
         "receipt_count": receipt_count,
     }
 
 
-def _infer_grocery_subcategory(raw_name: Any) -> str:
-    text = str(raw_name or "").strip().casefold()
-    if not text:
-        return "unclassified"
-    for subcategory, keywords in GROCERY_SUBCATEGORY_KEYWORDS:
-        if any(keyword in text for keyword in keywords):
-            return subcategory
-    return "unclassified"
-
-
-def _receipts_need_line_item_fallback(receipts: list[dict[str, Any]]) -> bool:
+def _compute_grocery_subcategory_30d(receipts: list[dict[str, Any]]) -> dict[str, Any]:
     now = dt_util.as_local(dt_util.now())
     cutoff_30 = now - timedelta(days=30)
-    for receipt in receipts:
-        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
-            continue
-        dt = _parse_receipt_datetime(receipt.get("purchased_at"))
-        if dt is None or dt_util.as_local(dt) < cutoff_30:
-            continue
-        if _receipt_total(receipt) is None:
-            continue
-        persisted = receipt.get("receipt_subcategories")
-        if not (isinstance(persisted, list) and persisted):
-            return True
-    return False
-
-
-def _compute_grocery_subcategory_30d(
-    receipts: list[dict[str, Any]], line_items: list[dict[str, Any]] | None
-) -> dict[str, Any]:
-    now = dt_util.as_local(dt_util.now())
-    cutoff_30 = now - timedelta(days=30)
-    by_receipt: dict[str, list[dict[str, Any]]] = {}
-    for line in (line_items or []):
-        receipt_id = str(line.get("receipt_id") or "").strip()
-        if not receipt_id:
-            continue
-        by_receipt.setdefault(receipt_id, []).append(line)
 
     totals: dict[str, float] = {}
     total = 0.0
@@ -903,7 +864,7 @@ def _compute_grocery_subcategory_30d(
     line_items_total = 0.0
     line_item_count = 0
     for receipt in receipts:
-        if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
+        if str(receipt.get("receipt_category") or "").strip().lower() == "dining":
             continue
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
         if dt is None:
@@ -957,34 +918,8 @@ def _compute_grocery_subcategory_30d(
                     unclassified_total += remainder
                 continue
 
-        receipt_id = str(receipt.get("id") or "").strip()
-        lines = by_receipt.get(receipt_id, [])
-        if not lines:
-            totals["unclassified"] = totals.get("unclassified", 0.0) + receipt_total
-            unclassified_total += receipt_total
-            continue
-
-        receipt_line_total = 0.0
-        for line in lines:
-            try:
-                amount = float(line.get("line_total"))
-            except Exception:
-                amount = 0.0
-            if amount <= 0:
-                continue
-            receipt_line_total += amount
-            line_items_total += amount
-            line_item_count += 1
-            subcategory = _infer_grocery_subcategory(line.get("raw_name"))
-            totals[subcategory] = totals.get(subcategory, 0.0) + amount
-            if subcategory == "unclassified":
-                unclassified_total += amount
-
-        # Keep sensor totals consistent with receipt totals even when line items don't fully add up.
-        remainder = receipt_total - receipt_line_total
-        if remainder > 0.009:
-            totals["unclassified"] = totals.get("unclassified", 0.0) + remainder
-            unclassified_total += remainder
+        totals["unclassified"] = totals.get("unclassified", 0.0) + receipt_total
+        unclassified_total += receipt_total
 
     sorted_items = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
     items = []

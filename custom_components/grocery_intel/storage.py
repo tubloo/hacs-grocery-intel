@@ -96,6 +96,9 @@ class ReceiptStorage:
                     receipt["receipt_category"] = receipt.get("receipt_type")
                 if "receipt_category_source" not in receipt and "receipt_type_source" in receipt:
                     receipt["receipt_category_source"] = receipt.get("receipt_type_source")
+                # Normalize old enum value to the new one.
+                if str(receipt.get("receipt_category") or "").strip().lower() == "eating_out":
+                    receipt["receipt_category"] = "dining"
                 if "receipt_subcategories" not in receipt:
                     migrated_rows: list[dict[str, Any]] = []
                     legacy_rows = receipt.get("grocery_subcategories")

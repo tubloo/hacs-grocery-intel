@@ -42,7 +42,6 @@
           "llm_extra_instructions": "LLM extra instructions (optional)",
           "receipt_category_llm_prompt": "Receipt category LLM prompt (optional)",
           "azure_api_version": "Azure API version",
-          "eating_out_keywords": "Eating-out keywords (comma-separated, optional)",
           "shopping_auto_approve_enabled": "Auto-add shopping items (daily)",
           "shopping_auto_approve_cooldown_days": "Auto-add cooldown (days)",
           "shopping_auto_approve_confidence_threshold": "Auto-add confidence threshold (0.5–0.99)",

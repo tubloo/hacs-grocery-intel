@@ -25,7 +25,6 @@ from .const import (
     CONF_LLM_BASE_URL,
     CONF_LLM_EXTRA_INSTRUCTIONS,
     CONF_RECEIPT_CATEGORY_LLM_PROMPT,
-    CONF_EATING_OUT_KEYWORDS,
     CONF_AZURE_API_VERSION,
     CONF_SHOPPING_AUTO_APPROVE_ENABLED,
     CONF_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
@@ -58,7 +57,6 @@ from .const import (
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_EXTRA_INSTRUCTIONS,
     DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT,
-    DEFAULT_EATING_OUT_KEYWORDS,
     DEFAULT_AZURE_API_VERSION,
     DEFAULT_SHOPPING_AUTO_APPROVE_ENABLED,
     DEFAULT_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
@@ -210,7 +208,6 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             for key in (
                 CONF_LLM_EXTRA_INSTRUCTIONS,
                 CONF_RECEIPT_CATEGORY_LLM_PROMPT,
-                CONF_EATING_OUT_KEYWORDS,
             ):
                 self._strip(key)
             return
@@ -343,12 +340,6 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             ] = selector.TextSelector(
                 selector.TextSelectorConfig(multiline=True)
             )
-            fields[
-                vol.Optional(
-                    CONF_EATING_OUT_KEYWORDS,
-                    default=self._opt_default(CONF_EATING_OUT_KEYWORDS, DEFAULT_EATING_OUT_KEYWORDS),
-                )
-            ] = str
             fields[vol.Optional(self._field_back, default=False)] = selector.BooleanSelector()
             return vol.Schema(fields)
 
