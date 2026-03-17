@@ -100,6 +100,7 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - `sensor.grocery_intel_top_price_increases`
 - `sensor.grocery_intel_overpaid_items`
 - `sensor.grocery_intel_best_store_by_item`
+- `sensor.grocery_intel_spend_by_month_12m`
 
 ### Sensors explained
 - `sensor.grocery_intel_spend_week`: current ISO-week spend total.
@@ -131,6 +132,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `sensor.grocery_intel_top_price_increases`: largest increases by median unit price (up to 10; requires line-item observations).
 - `sensor.grocery_intel_overpaid_items`: “overpaid vs baseline” items (up to 10; requires line-item observations).
 - `sensor.grocery_intel_best_store_by_item`: best store for an item by median unit price (up to 10; requires enough history).
+- `sensor.grocery_intel_spend_by_month_12m`: trailing 12 calendar months from receipt `purchased_at` (oldest→newest). Each `items` row includes `month`, `month_start`, `grocery_total`, `grocery_ex_vice`, `vice_total`, `dining_total`, and `total`.
 
 ## Services
 - `grocery_intel.add_receipt`
@@ -282,6 +284,7 @@ entities:
   - entity: sensor.grocery_intel_top_price_increases
   - entity: sensor.grocery_intel_overpaid_items
   - entity: sensor.grocery_intel_best_store_by_item
+  - entity: sensor.grocery_intel_spend_by_month_12m
 ```
 
 The list-style sensors store their details in attributes under `items` (shown in **Developer Tools → States**).

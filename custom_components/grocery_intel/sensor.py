@@ -57,6 +57,7 @@ class GroceryIntelDataSnapshot:
     spend_by_category_30d: dict[str, Any]
     spend_by_category_month: dict[str, Any]
     grocery_subcategory_30d: dict[str, Any]
+    spend_by_month_12m: list[dict[str, Any]]
     grocery_week: float
     grocery_month: float
     grocery_ytd: float
@@ -66,6 +67,15 @@ class GroceryIntelDataSnapshot:
     vice_week: float
     vice_month: float
     vice_ytd: float
+
+
+VICE_SUBCATEGORY_KEYS = {
+    "alcohol_beer",
+    "alcohol_wine",
+    "alcohol_spirits",
+    "alcohol_cider",
+    "tobacco_nicotine",
+}
 
 
 class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
@@ -108,6 +118,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             spend_by_category_30d = dict(cached["spend_by_category_30d"])
             spend_by_category_month = dict(cached["spend_by_category_month"])
             grocery_subcategory_30d = dict(cached["grocery_subcategory_30d"])
+            spend_by_month_12m = list(cached["spend_by_month_12m"])
             category_period_totals = dict(cached["category_period_totals"])
         else:
             receipts = await self._storage.async_list_receipts()
@@ -122,6 +133,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             spend_by_category_30d = _compute_spend_by_category_30d(receipts)
             spend_by_category_month = _compute_spend_by_category_month(receipts)
             grocery_subcategory_30d = _compute_grocery_subcategory_30d(receipts)
+            spend_by_month_12m = _compute_spend_by_month_12m(receipts)
             category_period_totals = _compute_category_period_totals(receipts)
             self._receipt_metrics_cache_key = cache_key
             self._receipt_metrics_cache = {
@@ -139,6 +151,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
                 "spend_by_category_30d": spend_by_category_30d,
                 "spend_by_category_month": spend_by_category_month,
                 "grocery_subcategory_30d": grocery_subcategory_30d,
+                "spend_by_month_12m": spend_by_month_12m,
                 "category_period_totals": category_period_totals,
             }
         recent_activities = _compute_recent_activities(activities)
@@ -207,6 +220,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             spend_by_category_30d=spend_by_category_30d,
             spend_by_category_month=spend_by_category_month,
             grocery_subcategory_30d=grocery_subcategory_30d,
+            spend_by_month_12m=spend_by_month_12m,
             grocery_week=float(category_period_totals.get("grocery_week", 0.0)),
             grocery_month=float(category_period_totals.get("grocery_month", 0.0)),
             grocery_ytd=float(category_period_totals.get("grocery_ytd", 0.0)),
@@ -467,6 +481,14 @@ async def async_setup_entry(
             "best_store_by_item",
             device_info,
             "best_store_items",
+        ),
+        GroceryAnalyticsSensor(
+            coordinator,
+            f"{DOMAIN}_spend_by_month_12m",
+            "Spend by month 12m",
+            "spend_by_month_12m",
+            device_info,
+            "spend_by_month_12m",
         ),
     ]
 
@@ -958,13 +980,6 @@ def _compute_spend_by_category_month(receipts: list[dict[str, Any]]) -> dict[str
 def _compute_category_period_totals(receipts: list[dict[str, Any]]) -> dict[str, float]:
     now = dt_util.as_local(dt_util.now())
     iso_year, iso_week, _ = now.isocalendar()
-    vice_keys = {
-        "alcohol_beer",
-        "alcohol_wine",
-        "alcohol_spirits",
-        "alcohol_cider",
-        "tobacco_nicotine",
-    }
     out: dict[str, float] = {
         "grocery_week": 0.0,
         "grocery_month": 0.0,
@@ -1009,20 +1024,7 @@ def _compute_category_period_totals(receipts: list[dict[str, Any]]) -> dict[str,
         if is_ytd:
             out["grocery_ytd"] += total_f
 
-        vice_amount = 0.0
-        rows = receipt.get("receipt_subcategories")
-        if isinstance(rows, list):
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                if str(row.get("subcategory") or "").strip() not in vice_keys:
-                    continue
-                try:
-                    amt = float(row.get("total"))
-                except Exception:
-                    amt = 0.0
-                if amt > 0:
-                    vice_amount += amt
+        vice_amount = _receipt_vice_total(receipt)
         if vice_amount <= 0:
             continue
         if is_week:
@@ -1031,6 +1033,73 @@ def _compute_category_period_totals(receipts: list[dict[str, Any]]) -> dict[str,
             out["vice_month"] += vice_amount
         if is_ytd:
             out["vice_ytd"] += vice_amount
+    return out
+
+
+def _compute_spend_by_month_12m(receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = dt_util.as_local(dt_util.now())
+
+    def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+        idx = (year * 12 + (month - 1)) + delta
+        out_year, out_month_idx = divmod(idx, 12)
+        return out_year, out_month_idx + 1
+
+    months: list[tuple[int, int]] = []
+    month_keys: list[str] = []
+    for back in range(11, -1, -1):
+        yy, mm = _shift_month(now.year, now.month, -back)
+        months.append((yy, mm))
+        month_keys.append(f"{yy:04d}-{mm:02d}")
+
+    buckets: dict[str, dict[str, float]] = {
+        key: {
+            "grocery_total": 0.0,
+            "vice_total": 0.0,
+            "dining_total": 0.0,
+        }
+        for key in month_keys
+    }
+
+    for receipt in receipts:
+        dt = _parse_receipt_datetime(receipt.get("purchased_at"))
+        if dt is None:
+            continue
+        local_dt = dt_util.as_local(dt)
+        month_key = f"{local_dt.year:04d}-{local_dt.month:02d}"
+        bucket = buckets.get(month_key)
+        if bucket is None:
+            continue
+        total_f = _receipt_total(receipt)
+        if total_f is None:
+            continue
+
+        category = str(receipt.get("receipt_category") or "").strip().lower()
+        if category == "dining":
+            bucket["dining_total"] += total_f
+            continue
+
+        bucket["grocery_total"] += total_f
+        bucket["vice_total"] += _receipt_vice_total(receipt)
+
+    out: list[dict[str, Any]] = []
+    for (year, month), key in zip(months, month_keys):
+        bucket = buckets[key]
+        grocery_total = float(bucket["grocery_total"])
+        vice_total = float(bucket["vice_total"])
+        dining_total = float(bucket["dining_total"])
+        grocery_ex_vice = grocery_total - vice_total
+        total = grocery_total + dining_total
+        out.append(
+            {
+                "month": key,
+                "month_start": f"{year:04d}-{month:02d}-01",
+                "grocery_total": round(grocery_total, 2),
+                "grocery_ex_vice": round(grocery_ex_vice, 2),
+                "vice_total": round(vice_total, 2),
+                "dining_total": round(dining_total, 2),
+                "total": round(total, 2),
+            }
+        )
     return out
 
 
@@ -1216,6 +1285,25 @@ def _receipt_total(receipt: dict[str, Any]) -> float | None:
         return float(total) if total is not None else None
     except Exception:
         return None
+
+
+def _receipt_vice_total(receipt: dict[str, Any]) -> float:
+    vice_amount = 0.0
+    rows = receipt.get("receipt_subcategories")
+    if not isinstance(rows, list):
+        return 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("subcategory") or "").strip() not in VICE_SUBCATEGORY_KEYS:
+            continue
+        try:
+            amt = float(row.get("total"))
+        except Exception:
+            amt = 0.0
+        if amt > 0:
+            vice_amount += amt
+    return vice_amount
 
 
 def _compute_inventory_recently_seen(

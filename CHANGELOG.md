@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.0.19 (2026-03-17)
+
+- Analytics: added `sensor.grocery_intel_spend_by_month_12m` with trailing 12-month receipt-date buckets in `items` (`month`, `month_start`, `grocery_total`, `grocery_ex_vice`, `vice_total`, `dining_total`, `total`).
+- Consistency: reuse a shared vice-subcategory calculator in period totals and monthly analytics.
+- Docs: updated `README.md` entities/sensor descriptions and dashboard example; updated `AGENTS.md` analytics summary.
+
 ## 1.0.18 (2026-03-16)
 
 - New period sensors for category-focused dashboards:
