@@ -60,7 +60,7 @@ Guidelines:
 ### Analytics, activities, and undo
 
 - Rich data stored in HA storage; sensors are summaries.
-- Spend analytics now include backend `receipt_category` splits (30d/month), a trailing 12-month spend split sensor (`spend_by_month_12m`), and a grocery-subcategory 30d breakdown sensor driven by persisted receipt subcategories.
+- Spend analytics now include dynamic period sensors for categories and subcategories (`spend_by_category_periods`, `spend_by_subcategory_periods`) driven by persisted receipt categories/subcategories.
 - Automatic actions create an activity record; undo exists for supported actions and must be safe.
 
 ### Automated shopping list (v1)
