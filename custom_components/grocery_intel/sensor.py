@@ -40,14 +40,9 @@ from .storage import ReceiptStorage
 class GroceryIntelDataSnapshot:
     week_total: float
     month_total: float
-    ytd_total: float
-    rolling_7d_total: float
-    rolling_30d_total: float
-    receipt_count_30d: int
-    avg_basket_30d: float
+    year_total: float
     receipt_status_counts: dict[str, int]
     receipt_processing_timing: dict[str, Any]
-    top_stores_30d: list[dict[str, Any]]
     recent_receipts: list[dict[str, Any]]
     recent_activities: list[dict[str, Any]]
     inventory_recently_seen: list[dict[str, Any]]
@@ -58,6 +53,8 @@ class GroceryIntelDataSnapshot:
     spend_by_subcategory_periods: list[dict[str, Any]]
     spend_by_category_periods_meta: dict[str, Any]
     spend_by_subcategory_periods_meta: dict[str, Any]
+    unknown_category_receipts: list[dict[str, Any]]
+    unknown_subcategory_items: list[dict[str, Any]]
 
 
 VICE_SUBCATEGORY_KEYS = {
@@ -70,6 +67,8 @@ VICE_SUBCATEGORY_KEYS = {
 
 MAX_CATEGORY_PERIOD_ROWS = 120
 MAX_SUBCATEGORY_PERIOD_ROWS = 180
+MAX_UNKNOWN_CATEGORY_RECEIPT_ROWS = 100
+MAX_UNKNOWN_SUBCATEGORY_ITEM_ROWS = 150
 
 
 class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
@@ -100,12 +99,7 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             cached = self._receipt_metrics_cache
             week_total = float(cached["week_total"])
             month_total = float(cached["month_total"])
-            ytd_total = float(cached["ytd_total"])
-            rolling_7d_total = float(cached["rolling_7d_total"])
-            rolling_30d_total = float(cached["rolling_30d_total"])
-            receipt_count_30d = int(cached["receipt_count_30d"])
-            avg_basket_30d = float(cached["avg_basket_30d"])
-            top_stores_30d = list(cached["top_stores_30d"])
+            year_total = float(cached["year_total"])
             receipt_status_counts = dict(cached["receipt_status_counts"])
             receipt_processing_timing = dict(cached["receipt_processing_timing"])
             recent_receipts = list(cached["recent_receipts"])
@@ -113,13 +107,12 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             spend_by_subcategory_periods = list(cached["spend_by_subcategory_periods"])
             spend_by_category_periods_meta = dict(cached["spend_by_category_periods_meta"])
             spend_by_subcategory_periods_meta = dict(cached["spend_by_subcategory_periods_meta"])
+            unknown_category_receipts = list(cached["unknown_category_receipts"])
+            unknown_subcategory_items = list(cached["unknown_subcategory_items"])
         else:
             receipts = await self._storage.async_list_receipts()
             week_total, month_total = _compute_spend_totals(receipts)
-            ytd_total = _compute_spend_ytd(receipts)
-            rolling_7d_total, rolling_30d_total, receipt_count_30d, avg_basket_30d, top_stores_30d = (
-                _compute_rolling_stats(receipts)
-            )
+            year_total = _compute_spend_year(receipts)
             receipt_status_counts = _compute_receipt_status_counts(receipts)
             receipt_processing_timing = _compute_receipt_processing_timing(receipts)
             recent_receipts = _compute_recent_receipts(receipts)
@@ -129,16 +122,13 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
                 spend_by_category_periods_meta,
                 spend_by_subcategory_periods_meta,
             ) = _compute_spend_period_analytics(receipts)
+            unknown_category_receipts = _compute_unknown_category_receipts(receipts)
+            unknown_subcategory_items = _compute_unknown_subcategory_items(receipts)
             self._receipt_metrics_cache_key = cache_key
             self._receipt_metrics_cache = {
                 "week_total": week_total,
                 "month_total": month_total,
-                "ytd_total": ytd_total,
-                "rolling_7d_total": rolling_7d_total,
-                "rolling_30d_total": rolling_30d_total,
-                "receipt_count_30d": receipt_count_30d,
-                "avg_basket_30d": avg_basket_30d,
-                "top_stores_30d": top_stores_30d,
+                "year_total": year_total,
                 "receipt_status_counts": receipt_status_counts,
                 "receipt_processing_timing": receipt_processing_timing,
                 "recent_receipts": recent_receipts,
@@ -146,6 +136,8 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
                 "spend_by_subcategory_periods": spend_by_subcategory_periods,
                 "spend_by_category_periods_meta": spend_by_category_periods_meta,
                 "spend_by_subcategory_periods_meta": spend_by_subcategory_periods_meta,
+                "unknown_category_receipts": unknown_category_receipts,
+                "unknown_subcategory_items": unknown_subcategory_items,
             }
         recent_activities = _compute_recent_activities(activities)
 
@@ -196,14 +188,9 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
         return GroceryIntelDataSnapshot(
             week_total=week_total,
             month_total=month_total,
-            ytd_total=ytd_total,
-            rolling_7d_total=rolling_7d_total,
-            rolling_30d_total=rolling_30d_total,
-            receipt_count_30d=receipt_count_30d,
-            avg_basket_30d=avg_basket_30d,
+            year_total=year_total,
             receipt_status_counts=receipt_status_counts,
             receipt_processing_timing=receipt_processing_timing,
-            top_stores_30d=top_stores_30d,
             recent_receipts=recent_receipts,
             recent_activities=recent_activities,
             inventory_recently_seen=inventory_recently_seen,
@@ -214,6 +201,8 @@ class GrocerySpendCoordinator(DataUpdateCoordinator[GroceryIntelDataSnapshot]):
             spend_by_subcategory_periods=spend_by_subcategory_periods,
             spend_by_category_periods_meta=spend_by_category_periods_meta,
             spend_by_subcategory_periods_meta=spend_by_subcategory_periods_meta,
+            unknown_category_receipts=unknown_category_receipts,
+            unknown_subcategory_items=unknown_subcategory_items,
         )
 
 
@@ -253,47 +242,12 @@ async def async_setup_entry(
         ),
         GrocerySpendSensor(
             coordinator,
-            f"{DOMAIN}_spend_ytd",
-            "Spend YTD",
-            "spend_ytd",
+            f"{DOMAIN}_spend_year",
+            "Spend year",
+            "spend_year",
             device_info,
             currency,
-            "ytd_total",
-        ),
-        GrocerySpendSensor(
-            coordinator,
-            f"{DOMAIN}_spend_7d",
-            "Spend 7d",
-            "spend_7d",
-            device_info,
-            currency,
-            "rolling_7d_total",
-        ),
-        GrocerySpendSensor(
-            coordinator,
-            f"{DOMAIN}_spend_30d",
-            "Spend 30d",
-            "spend_30d",
-            device_info,
-            currency,
-            "rolling_30d_total",
-        ),
-        GrocerySpendSensor(
-            coordinator,
-            f"{DOMAIN}_avg_basket_30d",
-            "Avg basket 30d",
-            "avg_basket_30d",
-            device_info,
-            currency,
-            "avg_basket_30d",
-        ),
-        GroceryCountSensor(
-            coordinator,
-            f"{DOMAIN}_receipt_count_30d",
-            "Receipts 30d",
-            "receipt_count_30d",
-            device_info,
-            "receipt_count_30d",
+            "year_total",
         ),
         GroceryAnalyticsSensor(
             coordinator,
@@ -317,14 +271,6 @@ async def async_setup_entry(
             "Receipt processing",
             "receipt_processing",
             device_info,
-        ),
-        GroceryAnalyticsSensor(
-            coordinator,
-            f"{DOMAIN}_top_stores_30d",
-            "Top stores 30d",
-            "top_stores_30d",
-            device_info,
-            "top_stores_30d",
         ),
         GroceryAnalyticsSensor(
             coordinator,
@@ -374,6 +320,22 @@ async def async_setup_entry(
             device_info,
             "best_store_items",
         ),
+        GroceryAnalyticsSensor(
+            coordinator,
+            f"{DOMAIN}_unknown_category_receipts",
+            "Unknown category receipts",
+            "unknown_category_receipts",
+            device_info,
+            "unknown_category_receipts",
+        ),
+        GroceryAnalyticsSensor(
+            coordinator,
+            f"{DOMAIN}_unknown_subcategory_items",
+            "Unknown subcategory items",
+            "unknown_subcategory_items",
+            device_info,
+            "unknown_subcategory_items",
+        ),
     ]
 
     async_add_entities(entities)
@@ -412,38 +374,6 @@ class GrocerySpendSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntit
         if value is None:
             return None
         return round(float(value), 2)
-
-
-class GroceryCountSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntity):
-    """Simple count sensor."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: GrocerySpendCoordinator,
-        unique_id: str,
-        name: str,
-        suggested_object_id: str,
-        device_info: DeviceInfo,
-        snapshot_key: str,
-    ) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = unique_id
-        self._attr_name = name
-        self._attr_suggested_object_id = suggested_object_id
-        self._attr_device_info = device_info
-        self._snapshot_key = snapshot_key
-
-    @property
-    def native_value(self) -> int | None:
-        data = self.coordinator.data
-        if not data:
-            return None
-        value = getattr(data, self._snapshot_key, None)
-        if value is None:
-            return None
-        return int(value)
 
 
 class GroceryAnalyticsSensor(CoordinatorEntity[GrocerySpendCoordinator], SensorEntity):
@@ -561,10 +491,10 @@ def _compute_spend_totals(receipts: list[dict[str, Any]]) -> tuple[float, float]
     return week_total, month_total
 
 
-def _compute_spend_ytd(receipts: list[dict[str, Any]]) -> float:
-    """Calendar-year-to-date spend total (Home Assistant local timezone)."""
+def _compute_spend_year(receipts: list[dict[str, Any]]) -> float:
+    """Calendar-year spend total (Home Assistant local timezone)."""
     now = dt_util.as_local(dt_util.now())
-    ytd_total = 0.0
+    year_total = 0.0
     for receipt in receipts:
         dt = _parse_receipt_datetime(receipt.get("purchased_at"))
         if dt is None:
@@ -579,8 +509,8 @@ def _compute_spend_ytd(receipts: list[dict[str, Any]]) -> float:
             total_f = None
         if total_f is None:
             continue
-        ytd_total += total_f
-    return ytd_total
+        year_total += total_f
+    return year_total
 
 
 def _compute_receipt_status_counts(receipts: list[dict[str, Any]]) -> dict[str, int]:
@@ -663,57 +593,12 @@ def _compute_receipt_processing_timing(
     }
 
 
-def _compute_rolling_stats(
-    receipts: list[dict[str, Any]],
-) -> tuple[float, float, int, float, list[dict[str, Any]]]:
-    now = dt_util.as_local(dt_util.now())
-    cutoff_7 = now - timedelta(days=7)
-    cutoff_30 = now - timedelta(days=30)
-
-    total_7 = 0.0
-    total_30 = 0.0
-    count_30 = 0
-    totals_30: list[float] = []
-    by_store: dict[str, float] = {}
-
-    for receipt in receipts:
-        dt = _parse_receipt_datetime(receipt.get("purchased_at"))
-        if dt is None:
-            continue
-        local_dt = dt_util.as_local(dt)
-        total = receipt.get("total")
-        try:
-            total_f = float(total) if total is not None else None
-        except Exception:
-            total_f = None
-        if total_f is None:
-            continue
-
-        if local_dt >= cutoff_7:
-            total_7 += total_f
-        if local_dt >= cutoff_30:
-            total_30 += total_f
-            count_30 += 1
-            totals_30.append(total_f)
-            store = receipt.get("store_name") or "Unknown"
-            by_store[store] = by_store.get(store, 0.0) + total_f
-
-    avg_basket = (sum(totals_30) / len(totals_30)) if totals_30 else 0.0
-
-    top_stores = [
-        {"store_name": k, "total": round(v, 2)}
-        for k, v in sorted(by_store.items(), key=lambda kv: kv[1], reverse=True)[:10]
-    ]
-
-    return total_7, total_30, count_30, avg_basket, top_stores
-
-
 def _compute_spend_period_analytics(
     receipts: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     now = dt_util.as_local(dt_util.now())
     iso_year, iso_week, _ = now.isocalendar()
-    period_rank = {"week": 0, "month": 1, "ytd": 2, "month_12m": 3}
+    period_rank = {"week": 0, "month": 1, "year": 2, "month_12m": 3}
 
     def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
         idx = (year * 12 + (month - 1)) + delta
@@ -763,7 +648,7 @@ def _compute_spend_period_analytics(
         month_key = f"{local_dt.year:04d}-{local_dt.month:02d}"
         is_week = local_dt.isocalendar()[:2] == (iso_year, iso_week)
         is_month = (local_dt.year, local_dt.month) == (now.year, now.month)
-        is_ytd = local_dt.year == now.year
+        is_year = local_dt.year == now.year
 
         if is_week:
             _add_category("week", category, total_f)
@@ -771,9 +656,9 @@ def _compute_spend_period_analytics(
         if is_month:
             _add_category("month", category, total_f)
             _add_subcategory("month", category, sub_totals)
-        if is_ytd:
-            _add_category("ytd", category, total_f)
-            _add_subcategory("ytd", category, sub_totals)
+        if is_year:
+            _add_category("year", category, total_f)
+            _add_subcategory("year", category, sub_totals)
         if month_key in month_key_set:
             _add_category("month_12m", category, total_f, month_key=month_key)
             _add_subcategory("month_12m", category, sub_totals, month_key=month_key)
@@ -794,6 +679,7 @@ def _compute_spend_period_analytics(
             period_rank.get(kv[0][0], 999),
             kv[0][1],
             _month_sort_key(kv[0][0], kv[0][2]),
+            -kv[1],
         ),
     )
     spend_by_category_periods: list[dict[str, Any]] = []
@@ -855,7 +741,7 @@ def _truncate_period_rows(rows: list[dict[str, Any]], *, max_rows: int) -> tuple
         "max_rows": int(max_rows),
         "returned_rows": len(returned),
         "dropped_rows": dropped,
-        "drop_policy": "period_priority(week,month,ytd,month_12m) then category then newest month_12m then total desc",
+        "drop_policy": "period_priority(week,month,year,month_12m) then category then newest month_12m then total_desc",
     }
 
 
@@ -878,6 +764,130 @@ def _compute_recent_receipts(receipts: list[dict[str, Any]]) -> list[dict[str, A
         )
     rows.sort(key=lambda x: x.get("purchased_at") or "", reverse=True)
     return rows[:20]
+
+
+def _is_unknown_category(value: Any) -> bool:
+    raw = str(value or "").strip().lower()
+    return raw in {"", "unknown", "uncategorized", "unclassified", "other", "none", "null"}
+
+
+def _is_unknown_subcategory(value: Any) -> bool:
+    raw = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return raw in {
+        "",
+        "unknown",
+        "uncategorized",
+        "unclassified",
+        "other",
+        "none",
+        "null",
+        "misc",
+        "miscellaneous",
+    }
+
+
+def _compute_unknown_category_receipts(receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for receipt in receipts:
+        if not _is_unknown_category(receipt.get("receipt_category")):
+            continue
+        dt = _parse_receipt_datetime(receipt.get("purchased_at"))
+        purchased_at = dt_util.as_local(dt).isoformat() if dt is not None else None
+        total_f = _receipt_total(receipt)
+        rows.append(
+            {
+                "receipt_id": receipt.get("id"),
+                "purchased_at": purchased_at,
+                "store_name": receipt.get("store_name"),
+                "total": round(float(total_f), 2) if isinstance(total_f, float) else None,
+                "filename": receipt.get("filename"),
+                "receipt_category": receipt.get("receipt_category"),
+                "receipt_category_source": receipt.get("receipt_category_source"),
+            }
+        )
+    rows.sort(key=lambda x: x.get("purchased_at") or "", reverse=True)
+    return rows[:MAX_UNKNOWN_CATEGORY_RECEIPT_ROWS]
+
+
+def _compute_unknown_subcategory_items(receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    totals_by_item: dict[str, float] = {}
+    count_by_item: dict[str, int] = {}
+    display_by_item: dict[str, str] = {}
+    category_by_item: dict[str, str] = {}
+    sample_store_by_item: dict[str, str] = {}
+    sample_receipt_by_item: dict[str, str] = {}
+    sample_date_by_item: dict[str, str] = {}
+
+    for receipt in receipts:
+        category = _receipt_category_key(receipt)
+        sub_totals = _receipt_subcategory_totals(receipt, fallback_total=_receipt_total(receipt))
+        has_unknown_subcategory = any(_is_unknown_subcategory(k) for k in sub_totals.keys())
+        if not has_unknown_subcategory:
+            continue
+
+        dt = _parse_receipt_datetime(receipt.get("purchased_at"))
+        purchased_at = dt_util.as_local(dt).isoformat() if dt is not None else None
+        store_name = str(receipt.get("store_name") or "Unknown")
+        receipt_id = str(receipt.get("id") or "")
+
+        line_items = receipt.get("line_items_raw")
+        if not isinstance(line_items, list):
+            line_items = []
+
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            raw_name = str(item.get("raw_name") or "").strip()
+            if not raw_name:
+                continue
+            key = raw_name.lower()
+            try:
+                amount = float(item.get("line_total"))
+            except Exception:
+                amount = 0.0
+            totals_by_item[key] = totals_by_item.get(key, 0.0) + max(amount, 0.0)
+            count_by_item[key] = count_by_item.get(key, 0) + 1
+            display_by_item.setdefault(key, raw_name)
+            category_by_item.setdefault(key, category)
+            sample_store_by_item.setdefault(key, store_name)
+            sample_receipt_by_item.setdefault(key, receipt_id)
+            if purchased_at:
+                sample_date_by_item.setdefault(key, purchased_at)
+
+        if line_items:
+            continue
+
+        # Fallback when we have unknown subcategory totals but no line-items:
+        # emit one synthetic row so dashboards still surface the gap.
+        unknown_total = 0.0
+        for sub_name, amount in sub_totals.items():
+            if _is_unknown_subcategory(sub_name):
+                unknown_total += float(amount)
+        synthetic_key = f"[no line items] {store_name.lower()}"
+        totals_by_item[synthetic_key] = totals_by_item.get(synthetic_key, 0.0) + max(unknown_total, 0.0)
+        count_by_item[synthetic_key] = count_by_item.get(synthetic_key, 0) + 1
+        display_by_item.setdefault(synthetic_key, f"[No line items] {store_name}")
+        category_by_item.setdefault(synthetic_key, category)
+        sample_store_by_item.setdefault(synthetic_key, store_name)
+        sample_receipt_by_item.setdefault(synthetic_key, receipt_id)
+        if purchased_at:
+            sample_date_by_item.setdefault(synthetic_key, purchased_at)
+
+    rows: list[dict[str, Any]] = []
+    for key, count in count_by_item.items():
+        rows.append(
+            {
+                "item": display_by_item.get(key, key),
+                "total": round(float(totals_by_item.get(key, 0.0)), 2),
+                "count": int(count),
+                "category": category_by_item.get(key, "uncategorized"),
+                "sample_store_name": sample_store_by_item.get(key),
+                "sample_receipt_id": sample_receipt_by_item.get(key),
+                "sample_purchased_at": sample_date_by_item.get(key),
+            }
+        )
+    rows.sort(key=lambda x: (-float(x.get("total", 0.0)), -int(x.get("count", 0)), str(x.get("item") or "")))
+    return rows[:MAX_UNKNOWN_SUBCATEGORY_ITEM_ROWS]
 
 
 def _compute_recent_activities(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:

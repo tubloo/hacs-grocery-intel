@@ -2,13 +2,22 @@
 
 ## Unreleased
 
+## 1.2.0 (2026-03-17)
+
+- Breaking analytics simplification: removed all rolling-window sensors and payload periods.
+- Renamed top-level yearly spend sensor to `sensor.grocery_intel_spend_year` (from `sensor.grocery_intel_spend_ytd`) for week/month/year naming consistency.
+- Dynamic period analytics now use `week`, `month`, `year`, and `month_12m`.
+- Added classification QA sensors:
+  - `sensor.grocery_intel_unknown_category_receipts`
+  - `sensor.grocery_intel_unknown_subcategory_items`
+
 ## 1.1.0 (2026-03-17)
 
 - Breaking analytics refactor: removed fixed category/subcategory period sensors (`spend_by_category_30d`, `spend_by_category_month`, `grocery_subcategory_30d`, `grocery|dining|vice_*`, and `spend_by_month_12m`).
 - Added dynamic period analytics sensors:
   - `sensor.grocery_intel_spend_by_category_periods`
   - `sensor.grocery_intel_spend_by_subcategory_periods`
-- New analytics payload supports periods `week`, `month`, `ytd`, and `month_12m` with optional month buckets (`month`, `month_start`).
+- New analytics payload supports periods `week`, `month`, `year`, and `month_12m` with optional month buckets (`month`, `month_start`).
 - Added deterministic row caps and truncation metadata on dynamic period sensors: `truncated`, `max_rows`, `returned_rows`, `dropped_rows`, `drop_policy`.
 
 ## 1.0.19 (2026-03-17)

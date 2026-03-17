@@ -49,10 +49,10 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 - Alcohol item normalization (Beer/Wine/Cider/Spirits)
 
 ## What you can analyze
-- Spend trends: weekly/monthly totals, rolling 7/30 days, average basket size, receipt counts
-- Store insights: top stores by spend and spend split across stores (within the selected window)
+- Spend trends: weekly/monthly/year totals and dynamic week/month/year/12-month category splits
 - Receipt timeline: recent receipts (store/date/total/filename) to spot gaps and spikes
 - Item-level analytics (when line items are available): price history, top increases, overpaid items, best store by item
+- Classification quality: receipts with unknown category and top unknown subcategory items
 - Purchase cadence: how frequently items appear across receipts (useful for shopping list suggestions)
 - Inventory freshness: items “recently seen” via pantry/fridge images (boost-only evidence; no exact counts)
 - Pipeline health: receipt processing status counts and timing breakdowns (overall/by method/provider)
@@ -75,43 +75,37 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 ## Entities
 - `sensor.grocery_intel_spend_week`
 - `sensor.grocery_intel_spend_month`
-- `sensor.grocery_intel_spend_ytd`
-- `sensor.grocery_intel_spend_7d`
-- `sensor.grocery_intel_spend_30d`
-- `sensor.grocery_intel_avg_basket_30d`
-- `sensor.grocery_intel_receipt_count_30d` (may appear as `sensor.grocery_intel_receipts_30d` on older installs)
+- `sensor.grocery_intel_spend_year`
 - `sensor.grocery_intel_spend_by_category_periods`
 - `sensor.grocery_intel_spend_by_subcategory_periods`
 - `sensor.grocery_intel_receipt_processing`
-- `sensor.grocery_intel_top_stores_30d`
 - `sensor.grocery_intel_recent_receipts`
 - `sensor.grocery_intel_recent_activities`
 - `sensor.grocery_intel_inventory_recently_seen`
 - `sensor.grocery_intel_top_price_increases`
 - `sensor.grocery_intel_overpaid_items`
 - `sensor.grocery_intel_best_store_by_item`
+- `sensor.grocery_intel_unknown_category_receipts`
+- `sensor.grocery_intel_unknown_subcategory_items`
 
 ### Sensors explained
 - `sensor.grocery_intel_spend_week`: current ISO-week spend total.
 - `sensor.grocery_intel_spend_month`: current calendar-month spend total.
-- `sensor.grocery_intel_spend_ytd`: calendar year-to-date spend total (based on `purchased_at` in HA local time).
-- `sensor.grocery_intel_spend_7d`: rolling 7-day spend total.
-- `sensor.grocery_intel_spend_30d`: rolling 30-day spend total.
-- `sensor.grocery_intel_avg_basket_30d`: average receipt total over the last 30 days.
-- `sensor.grocery_intel_receipt_count_30d`: receipt count over the last 30 days (entity_id may be `sensor.grocery_intel_receipts_30d` if it was created before the suggested id changed; use the one shown in your HA Entities list).
-- `sensor.grocery_intel_spend_by_category_periods`: dynamic category analytics across periods; each `items` row has `period` (`week`, `month`, `ytd`, `month_12m`), `category`, optional `month`/`month_start`, `total`, and `receipt_count`.
+- `sensor.grocery_intel_spend_year`: current calendar-year spend total (based on `purchased_at` in HA local time).
+- `sensor.grocery_intel_spend_by_category_periods`: dynamic category analytics across periods; each `items` row has `period` (`week`, `month`, `year`, `month_12m`), `category`, optional `month`/`month_start`, `total`, and `receipt_count`.
 - `sensor.grocery_intel_spend_by_subcategory_periods`: dynamic subcategory analytics across periods; each `items` row has `period`, `category`, `subcategory`, optional `month`/`month_start`, `total`, `receipt_count`, and `is_vice`.
   - Both sensors expose truncation metadata in attributes: `truncated`, `max_rows`, `returned_rows`, `dropped_rows`, and `drop_policy`.
 - `sensor.grocery_intel_receipt_processing`: pipeline health; state is the number of receipts in `pending+queued+running`, and attributes include `status_counts` and `timing` summaries (avg/median/p95 by method/provider).
 
 List-style sensors: the state is a count, and details are in the `items` attribute.
-- `sensor.grocery_intel_top_stores_30d`: top stores by spend (last 30 days, up to 10).
 - `sensor.grocery_intel_recent_receipts`: latest receipts (up to 20: `receipt_id`, `purchased_at`, `store_name`, `total`, `filename`, `receipt_category`, `receipt_category_source`).
 - `sensor.grocery_intel_recent_activities`: recent activity log (up to 25, payload is compacted to fit HA attribute limits).
 - `sensor.grocery_intel_inventory_recently_seen`: inventory evidence from vision (up to 100: `product`, `last_seen_at`, `expires_at`, `confidence`).
 - `sensor.grocery_intel_top_price_increases`: largest increases by median unit price (up to 10; requires line-item observations).
 - `sensor.grocery_intel_overpaid_items`: “overpaid vs baseline” items (up to 10; requires line-item observations).
 - `sensor.grocery_intel_best_store_by_item`: best store for an item by median unit price (up to 10; requires enough history).
+- `sensor.grocery_intel_unknown_category_receipts`: latest receipts missing a usable `receipt_category` (for classification cleanup).
+- `sensor.grocery_intel_unknown_subcategory_items`: top line-item names from receipts where subcategory data is still unknown/unclassified.
 
 ## Services
 - `grocery_intel.add_receipt`
@@ -246,16 +240,10 @@ title: Grocery Intel
 entities:
   - entity: sensor.grocery_intel_spend_week
   - entity: sensor.grocery_intel_spend_month
-  - entity: sensor.grocery_intel_spend_ytd
-  - entity: sensor.grocery_intel_spend_7d
-  - entity: sensor.grocery_intel_spend_30d
-  - entity: sensor.grocery_intel_avg_basket_30d
-  # Receipt count entity_id can be `sensor.grocery_intel_receipt_count_30d` or (older installs) `sensor.grocery_intel_receipts_30d`.
-  - entity: sensor.grocery_intel_receipt_count_30d
+  - entity: sensor.grocery_intel_spend_year
   - entity: sensor.grocery_intel_spend_by_category_periods
   - entity: sensor.grocery_intel_spend_by_subcategory_periods
   - entity: sensor.grocery_intel_receipt_processing
-  - entity: sensor.grocery_intel_top_stores_30d
   - entity: sensor.grocery_intel_recent_receipts
   - entity: sensor.grocery_intel_recent_activities
   - entity: sensor.grocery_intel_inventory_recently_seen
@@ -289,30 +277,20 @@ cards:
         icon: mdi:calendar-week
         primary: Week
         secondary: >-
-          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency') or 'kr' %}
           {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_week')|float(0)) }} {{ cur }}
       - type: custom:mushroom-template-card
         icon: mdi:calendar-month
         primary: Month
         secondary: >-
-          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency') or 'kr' %}
           {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_month')|float(0)) }} {{ cur }}
       - type: custom:mushroom-template-card
-        icon: mdi:calendar-range
-        primary: Last 30 days
-        secondary: >-
-          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
-          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_30d')|float(0)) }} {{ cur }}
-      - type: custom:mushroom-template-card
         icon: mdi:calendar
-        primary: Year to date
+        primary: Year
         secondary: >-
-          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-            or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
-          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_ytd')|float(0)) }} {{ cur }}
+          {% set cur = state_attr('sensor.grocery_intel_spend_month','currency') or 'kr' %}
+          {{ '{:,.2f}'.format(states('sensor.grocery_intel_spend_year')|float(0)) }} {{ cur }}
 ```
 
 #### Overpaid items (Markdown)
@@ -322,8 +300,7 @@ type: markdown
 title: Overpaid items (recent)
 content: |
   _Flag “bad buys”: paid well above your baseline._
-  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-    or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency') or 'kr' %}
   {% set items = state_attr('sensor.grocery_intel_overpaid_items','items') or [] %}
   {% if items|length == 0 %}
   No items.
@@ -346,8 +323,7 @@ type: markdown
 title: Recent receipts
 content: |
   _Latest receipts (deduped by day + store + total)._
-  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-    or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
+  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency') or 'kr' %}
   {% set items = state_attr('sensor.grocery_intel_recent_receipts','items') or [] %}
   {% if items|length == 0 %}
   No receipts yet.
@@ -412,56 +388,26 @@ content: |
 type: markdown
 title: Spend by Category
 content: |
-  _Categories inferred from purchases (last 30d → avg month)._
-  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency')
-    or state_attr('sensor.grocery_intel_spend_30d','currency') or 'kr' %}
-  {% set items = state_attr('sensor.grocery_intel_top_stores_30d','items') or [] %}
-  {% set factor = 30.4375 / 30 %}
-
-  {% set groceries = ['ica', 'maxi', 'kvantum', 'willys'] %}
-  {% set alc_tob = ['systembolaget', 'tobak', 'tobacco', 'cig', 'cigarette', 'snus'] %}
-  {% set discount_household = ['dollarstore'] %}
-  {% set specialty_food = ['spicenord', 'indiska spice'] %}
-  {% set food_delivery = ['uber eats', 'ubereats', 'wolt', 'foodora', 'doordash', 'deliveroo'] %}
-  {% set dining_out = ['restaurant', 'pizzeria', 'pizza', 'sushi', 'cafe', 'café', 'bar', 'grill', 'thai', 'indian'] %}
-
-  {% set g = namespace(sum=0.0) %}
-  {% set at = namespace(sum=0.0) %}
-  {% set d = namespace(sum=0.0) %}
-  {% set s = namespace(sum=0.0) %}
-  {% set fd = namespace(sum=0.0) %}
-  {% set do = namespace(sum=0.0) %}
-  {% set o = namespace(sum=0.0) %}
-
-  {% for it in items %}
-    {% set name = (it.get('store_name','') | lower) %}
-    {% set amt = (it.get('total',0) | float(0)) %}
-    {% if groceries | select('in', name) | list | length > 0 %}
-      {% set g.sum = g.sum + amt %}
-    {% elif alc_tob | select('in', name) | list | length > 0 %}
-      {% set at.sum = at.sum + amt %}
-    {% elif discount_household | select('in', name) | list | length > 0 %}
-      {% set d.sum = d.sum + amt %}
-    {% elif specialty_food | select('in', name) | list | length > 0 %}
-      {% set s.sum = s.sum + amt %}
-    {% elif food_delivery | select('in', name) | list | length > 0 %}
-      {% set fd.sum = fd.sum + amt %}
-    {% elif dining_out | select('in', name) | list | length > 0 %}
-      {% set do.sum = do.sum + amt %}
-    {% else %}
-      {% set o.sum = o.sum + amt %}
+  _Dynamic categories (week, month, year)._
+  {% set cur = state_attr('sensor.grocery_intel_spend_month','currency') or 'kr' %}
+  {% set items = state_attr('sensor.grocery_intel_spend_by_category_periods','items') or [] %}
+  {% set rows = namespace(by_cat={}) %}
+  {% for r in items %}
+    {% set p = r.get('period') %}
+    {% if p in ['week', 'month', 'year'] %}
+      {% set c = (r.get('category') or 'uncategorized') %}
+      {% if c not in rows.by_cat %}
+        {% set rows.by_cat = rows.by_cat | combine({ c: {'week':0.0,'month':0.0,'year':0.0} }) %}
+      {% endif %}
+      {% set base = rows.by_cat[c] %}
+      {% set rows.by_cat = rows.by_cat | combine({ c: base | combine({ p: (r.get('total',0)|float(0)) }) }) %}
     {% endif %}
   {% endfor %}
-
-  | Category | 30d spend | Avg / month |
-  |---|---:|---:|
-  | Groceries | {{ '{:,.2f}'.format(g.sum) }} {{ cur }} | {{ '{:,.2f}'.format(g.sum * factor) }} {{ cur }} |
-  | Alcohol & Tobacco | {{ '{:,.2f}'.format(at.sum) }} {{ cur }} | {{ '{:,.2f}'.format(at.sum * factor) }} {{ cur }} |
-  | Discount / household | {{ '{:,.2f}'.format(d.sum) }} {{ cur }} | {{ '{:,.2f}'.format(d.sum * factor) }} {{ cur }} |
-  | Specialty food | {{ '{:,.2f}'.format(s.sum) }} {{ cur }} | {{ '{:,.2f}'.format(s.sum * factor) }} {{ cur }} |
-  | Food delivery | {{ '{:,.2f}'.format(fd.sum) }} {{ cur }} | {{ '{:,.2f}'.format(fd.sum * factor) }} {{ cur }} |
-  | Dining out | {{ '{:,.2f}'.format(do.sum) }} {{ cur }} | {{ '{:,.2f}'.format(do.sum * factor) }} {{ cur }} |
-  | Other | {{ '{:,.2f}'.format(o.sum) }} {{ cur }} | {{ '{:,.2f}'.format(o.sum * factor) }} {{ cur }} |
+  | Category | Week | Month | Year |
+  |---|---:|---:|---:|
+  {% for c,vals in rows.by_cat | dictsort %}
+  | {{ c | replace('_',' ') | title }} | {{ '{:,.2f}'.format(vals.week) }} {{ cur }} | {{ '{:,.2f}'.format(vals.month) }} {{ cur }} | {{ '{:,.2f}'.format(vals.year) }} {{ cur }} |
+  {% endfor %}
 ```
 
 For AI-assisted “vibe coding”, you can paste `AGENTS.md` as the context/prompt input.
