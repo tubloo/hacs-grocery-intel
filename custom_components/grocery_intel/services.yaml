@@ -186,6 +186,18 @@ reparse_receipts:
       required: false
       selector:
         boolean:
+    since:
+      name: Since
+      description: Only re-parse receipts with purchased_at on/after this date or datetime (YYYY-MM-DD or ISO datetime).
+      required: false
+      selector:
+        text:
+    until:
+      name: Until
+      description: Only re-parse receipts with purchased_at on/before this date or datetime (YYYY-MM-DD or ISO datetime). Date-only includes the full local day.
+      required: false
+      selector:
+        text:
 
 clear_all_data:
   name: Clear all data

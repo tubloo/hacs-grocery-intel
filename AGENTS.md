@@ -56,6 +56,7 @@ Guidelines:
 - Images go to vision-capable extraction when configured.
 - Prompts enforce structured JSON output.
 - Missing archived files are treated as failures to avoid retry loops.
+- `reparse_receipts` supports optional `since` / `until` purchased-date filters (inclusive; date-only `until` includes full local day).
 
 ### Analytics, activities, and undo
 

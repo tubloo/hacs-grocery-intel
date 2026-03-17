@@ -28,6 +28,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_time_change, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
@@ -1118,12 +1119,58 @@ def _register_services(hass: HomeAssistant) -> None:
         receipt_id = call.data.get("receipt_id")
         limit = call.data.get("limit", 50)
         overwrite = bool(call.data.get("overwrite", False))
+        since_raw = _safe_str(call.data.get("since"))
+        until_raw = _safe_str(call.data.get("until"))
+
+        def _parse_range_boundary(raw: str | None, *, end_of_day: bool) -> Any | None:
+            if not raw:
+                return None
+            parsed_dt = dt_util.parse_datetime(str(raw))
+            if parsed_dt is not None:
+                return dt_util.as_local(parsed_dt)
+            parsed_date = dt_util.parse_date(str(raw))
+            if parsed_date is None:
+                return None
+            start_local = dt_util.as_local(dt_util.start_of_local_day(parsed_date))
+            if not end_of_day:
+                return start_local
+            return start_local + timedelta(days=1) - timedelta(microseconds=1)
+
+        since_dt = _parse_range_boundary(since_raw, end_of_day=False)
+        until_dt = _parse_range_boundary(until_raw, end_of_day=True)
+        if (since_raw and since_dt is None) or (until_raw and until_dt is None):
+            raise HomeAssistantError("Invalid since/until. Use YYYY-MM-DD or ISO datetime.")
+        if since_dt is not None and until_dt is not None and since_dt > until_dt:
+            raise HomeAssistantError("Invalid range: since must be <= until.")
+
         receipts = await data.storage.async_list_receipts()
         receipts.sort(key=lambda r: r.get("created_at", ""), reverse=True)
 
         if receipt_id:
             receipts = [r for r in receipts if r.get("id") == receipt_id]
         else:
+            if since_dt is not None or until_dt is not None:
+                filtered: list[dict[str, Any]] = []
+                for r in receipts:
+                    purchased_raw = _safe_str(r.get("purchased_at"))
+                    if not purchased_raw:
+                        continue
+                    purchased_dt = dt_util.parse_datetime(purchased_raw)
+                    if purchased_dt is None:
+                        purchased_date = dt_util.parse_date(purchased_raw)
+                        if purchased_date is None:
+                            continue
+                        purchased_local = dt_util.as_local(
+                            dt_util.start_of_local_day(purchased_date)
+                        )
+                    else:
+                        purchased_local = dt_util.as_local(purchased_dt)
+                    if since_dt is not None and purchased_local < since_dt:
+                        continue
+                    if until_dt is not None and purchased_local > until_dt:
+                        continue
+                    filtered.append(r)
+                receipts = filtered
             receipts = receipts[:limit]
 
         updated = 0
@@ -1205,7 +1252,13 @@ def _register_services(hass: HomeAssistant) -> None:
             await data.activity.async_add_activity(
                 kind="receipts_reparsed",
                 description=f"Re-parsed receipts ({updated})",
-                payload={"receipt_id": receipt_id, "count": updated, "reprocessed": reprocessed},
+                payload={
+                    "receipt_id": receipt_id,
+                    "count": updated,
+                    "reprocessed": reprocessed,
+                    "since": since_raw,
+                    "until": until_raw,
+                },
             )
             data.request_refresh()
 
@@ -1736,6 +1789,8 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("receipt_id"): cv.string,
                 vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=500)),
                 vol.Optional("overwrite", default=False): cv.boolean,
+                vol.Optional("since"): cv.string,
+                vol.Optional("until"): cv.string,
             }
         ),
     )

@@ -154,6 +154,7 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
 - Optional: `LLM extra instructions` lets you add fine-tuning instructions; the integration always enforces a JSON-only contract and appends your instructions.
 - Optional: `Receipt category LLM prompt` lets you add custom classification guidance specifically for `receipt_category` (`grocery` vs `dining`) when LLM extraction runs.
 - `reparse_receipts` works from stored receipt text (no file read), uses LLM parsing, and refreshes category/subcategory fields from the latest parsing logic.
+  - Optional date filters: `since` and `until` (YYYY-MM-DD or ISO datetime). Date-only `until` includes the full local day.
 - Tip (Home Assistant in Docker): `.local` hostnames may not resolve; prefer an IP like `http://192.168.x.x:11434` for `LLM base URL`.
 - Recommended (privacy): use `/media` paths so receipts/photos are protected by Home Assistant authentication.
   - **Home Assistant OS / Supervised:** `/media` is available by default.

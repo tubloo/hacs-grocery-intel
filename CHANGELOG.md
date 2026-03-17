@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.2.1 (2026-03-17)
+
+- Services: `grocery_intel.reparse_receipts` now supports optional `since` / `until` filters (YYYY-MM-DD or ISO datetime) to target a purchased-date range.
+
 ## 1.2.0 (2026-03-17)
 
 - Breaking analytics simplification: removed all rolling-window sensors and payload periods.
