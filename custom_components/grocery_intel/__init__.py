@@ -656,7 +656,7 @@ class GroceryIntelData:
                 _LOGGER.exception("Coordinator refresh failed")
 
         self.unsub_debounced_refresh = async_call_later(
-            self.hass, delay, lambda now: self.hass.async_create_task(_do_refresh(now))
+            self.hass, delay, lambda now: self.hass.add_job(_do_refresh, now)
         )
         self.debounced_refresh_scheduled_at = time.time()
 
@@ -680,7 +680,9 @@ class GroceryIntelData:
                     _LOGGER.exception("Coordinator refresh failed (failsafe)")
 
         self.unsub_refresh_failsafe = async_call_later(
-            self.hass, max(12.0, float(delay) + 12.0), lambda now: self.hass.async_create_task(_do_failsafe(now))
+            self.hass,
+            max(12.0, float(delay) + 12.0),
+            lambda now: self.hass.add_job(_do_failsafe, now),
         )
 
         expected_at = float(self.debounced_refresh_scheduled_at or time.time())
@@ -4462,6 +4464,10 @@ def _llm_system_prompt(
         "- Only set purchased_at if the date/time is explicitly printed on the receipt.\n"
         "- store_name should be the merchant/store name (avoid generic words like 'kvitto'/'receipt').\n"
         "- store_name should come from the merchant header/logo line(s), not from street/city/address lines.\n"
+        "- Prioritize the receipt text language over Home Assistant UI language. Infer language from the receipt "
+        "content and extract/classify in that language.\n"
+        "- Use Home country/region mainly for merchant/date/currency context; do not assume item language from UI "
+        "language alone.\n"
         "- receipt_category should be 'dining' for restaurants/cafes/bars/takeaway/food-delivery receipts, "
         "otherwise 'grocery'. If uncertain, use null.\n"
         "- receipt_subcategories should be an array of {subcategory, total}.\n"

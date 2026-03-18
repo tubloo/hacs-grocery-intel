@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.2.2 (2026-03-18)
+
+- Fix thread-safety warning in debounced refresh scheduling by replacing thread-unsafe task creation in delayed callbacks with `hass.add_job(...)`.
+- Fix coroutine warning (`coroutine was never awaited`) in refresh/failsafe callback scheduling.
+
 ## 1.2.1 (2026-03-17)
 
 - Services: `grocery_intel.reparse_receipts` now supports optional `since` / `until` filters (YYYY-MM-DD or ISO datetime) to target a purchased-date range.
