@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.2.3 (2026-03-18)
+
+- Improve LLM extraction failure reporting with friendly, actionable reasons (including OpenAI quota/rate/auth/model/server cases) instead of generic parse-failed text.
+- Telegram receipt success messages now include `receipt_id` for quick follow-up actions.
+
 ## 1.2.2 (2026-03-18)
 
 - Fix thread-safety warning in debounced refresh scheduling by replacing thread-unsafe task creation in delayed callbacks with `hass.add_job(...)`.

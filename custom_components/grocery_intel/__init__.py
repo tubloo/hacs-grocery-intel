@@ -2439,6 +2439,7 @@ async def _async_maybe_notify_telegram_receipt(
         receipt_category = _format_receipt_category(receipt.get("receipt_category"))
         purchased_at = _format_iso_dt_for_user(hass, receipt.get("purchased_at"))
         total = receipt.get("total")
+        rid = _safe_str(receipt.get("id")) or "unknown"
         currency = receipt.get("currency") or entry.options.get(CONF_CURRENCY_SYMBOL, DEFAULT_CURRENCY_SYMBOL) or ""
         try:
             items_n = len(receipt.get("line_items_raw") or [])
@@ -2450,6 +2451,7 @@ async def _async_maybe_notify_telegram_receipt(
             total_str = f"{total} {currency}".strip() if total is not None else "Unknown total"
         text = (
             f"Receipt analyzed: {filename}\n"
+            f"- Receipt ID: {rid}\n"
             f"- Category: {receipt_category}\n"
             f"- Store: {store}\n"
             f"- When: {purchased_at}\n"
@@ -3682,7 +3684,7 @@ async def _async_run_llm_for_receipt_file(
                 return
         except Exception as err:
             _LOGGER.warning("LLM file parse failed for %s: %s", filename, err)
-            await _async_mark_extract_failed(data, receipt, "LLM file parse failed")
+            await _async_mark_extract_failed(data, receipt, _friendly_llm_failure_reason(err))
 
 
 def _read_receipt_image_base64_and_mime_sync(path: str) -> tuple[str, str]:
@@ -4058,6 +4060,32 @@ async def _async_mark_extract_failed(
     await _async_maybe_notify_telegram_receipt(
         data, receipt_id=receipt_id, status="failed", reason=reason
     )
+
+
+def _friendly_llm_failure_reason(err: Exception) -> str:
+    """Map raw provider errors to actionable, user-facing failure reasons."""
+    raw = str(err or "").strip()
+    low = raw.lower()
+
+    if "insufficient_quota" in low or ("openai http 429" in low):
+        return "OpenAI quota exceeded (HTTP 429 insufficient_quota). Check billing/quota and retry."
+    if "rate_limit" in low or "too many requests" in low:
+        return "LLM rate limit reached. Retry in a few minutes."
+    if "timeout" in low:
+        return "LLM request timed out. Retry and/or reduce prompt size."
+    if "http 401" in low:
+        return "LLM authentication failed (HTTP 401). Check API key."
+    if "http 403" in low:
+        return "LLM access denied (HTTP 403). Check project/model permissions."
+    if "http 404" in low and "model" in low:
+        return "LLM model not found (HTTP 404). Check configured model name."
+    if "http 5" in low:
+        return "LLM provider server error. Retry shortly."
+
+    if not raw:
+        return "LLM file parse failed"
+    compact = raw.replace("\n", " ")
+    return compact[:220] + ("..." if len(compact) > 220 else "")
 
 
 def _safe_str(value: Any) -> str | None:
