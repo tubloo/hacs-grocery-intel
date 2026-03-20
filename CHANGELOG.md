@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.5 (2026-03-20)
+
+- Packaging fix: published a corrected release with proper manifest version metadata so HACS installs the intended build.
+
 ## 1.2.4 (2026-03-20)
 
 - Shopping automation: added configurable auto-added item marker and marker position (`prefix`/`suffix`) so users can tag items created by auto-shopping runs.
