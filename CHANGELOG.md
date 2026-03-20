@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.7 (2026-03-20)
+
+- Packaging fix: corrective release with aligned tag + manifest version so HACS resolves the intended build.
+
 ## 1.2.6 (2026-03-20)
 
 - Packaging fix: corrective release from updated `main` so HACS resolves the latest manifest version correctly.
