@@ -71,6 +71,8 @@ Guidelines:
   - Minimum purchase history: 3 observations
   - Cooldown after auto-add: 7 days (default)
   - Confidence threshold: 0.75 (default)
+- Optional name marker can be applied to auto-added shopping list items (configurable prefix/suffix).
+- Optional translation can localize auto-added item names to HA language using the configured LLM, gated by a confidence threshold and cached per product.
 - Never auto-removes items; undo removes only items added by that run.
 - Undo also restores per-product shopping state updates written by that run (for example `last_auto_added_at` and store-tag metadata).
 

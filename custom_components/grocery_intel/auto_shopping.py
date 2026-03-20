@@ -3,21 +3,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+import json
+import logging
 from statistics import median
 from typing import Any
 
+import aiohttp
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_LLM_API_KEY,
+    CONF_LLM_BASE_URL,
+    CONF_LLM_MODEL,
+    CONF_LLM_PROVIDER,
     CONF_SHOPPING_AUTO_APPROVE_ENABLED,
     CONF_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
     CONF_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
     CONF_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+    CONF_SHOPPING_AUTO_ITEM_MARKER,
+    CONF_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+    CONF_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+    CONF_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
     CONF_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
+    DEFAULT_LLM_API_KEY,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_PROVIDER,
     DEFAULT_SHOPPING_AUTO_APPROVE_ENABLED,
     DEFAULT_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
     DEFAULT_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
     DEFAULT_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+    DEFAULT_SHOPPING_AUTO_ITEM_MARKER,
+    DEFAULT_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+    DEFAULT_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+    DEFAULT_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
     DEFAULT_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
 )
 from .shopping_list_api import async_add_item, async_get_items, async_update_item
@@ -39,6 +59,8 @@ STORE_TAG_RETAG_HYSTERESIS = 0.10
 
 MAX_STORES_PER_RUN = 2
 MULTI_STORE_PENALTY_PCT = 0.05
+
+_LOGGER = logging.getLogger(__name__)
 
 LEVEL_PLENTY = "plenty"
 LEVEL_MEDIUM = "medium"
@@ -121,6 +143,305 @@ def _split_store_tag(name: str) -> tuple[str, str | None]:
     if not base or not store:
         return raw, None
     return base, store
+
+
+def _normalize_marker_position(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return "suffix" if raw == "suffix" else "prefix"
+
+
+def _apply_auto_item_marker(name: str, marker: str, position: str) -> str:
+    base = (name or "").strip()
+    mark = (marker or "").strip()
+    if not base or not mark:
+        return base
+    if position == "suffix":
+        return f"{base} {mark}"
+    return f"{mark} {base}"
+
+
+def _strip_auto_item_marker(name: str, marker: str, position: str) -> str:
+    text = (name or "").strip()
+    mark = (marker or "").strip()
+    if not text or not mark:
+        return text
+    if position == "suffix":
+        suffix = f" {mark}"
+        if text.endswith(suffix):
+            return text[: -len(suffix)].strip()
+        return text
+    prefix = f"{mark} "
+    if text.startswith(prefix):
+        return text[len(prefix) :].strip()
+    return text
+
+
+def _join_url(base: str, path: str) -> str:
+    return base.rstrip("/") + "/" + path.lstrip("/")
+
+
+def _extract_first_json_object(text: str) -> dict[str, Any]:
+    if not text:
+        return {}
+    start = text.find("{")
+    if start < 0:
+        return {}
+    depth = 0
+    in_str = False
+    esc = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(text[start : idx + 1])
+                    return obj if isinstance(obj, dict) else {}
+                except Exception:
+                    return {}
+    return {}
+
+
+def _extract_openai_output_text(payload: dict[str, Any]) -> str:
+    out = payload.get("output_text")
+    if isinstance(out, str) and out.strip():
+        return out
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+    chunks: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            txt = part.get("text")
+            if isinstance(txt, str) and txt.strip():
+                chunks.append(txt)
+    return "\n".join(chunks).strip()
+
+
+async def _async_translate_name_openai(
+    *,
+    hass,
+    base_url: str,
+    api_key: str,
+    model: str,
+    name: str,
+    target_language: str,
+) -> tuple[str, float] | None:
+    session = async_get_clientsession(hass)
+    url = _join_url(base_url, "/v1/responses")
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "display_name": {"type": "string"},
+            "confidence": {"type": "number"},
+        },
+        "required": ["display_name", "confidence"],
+    }
+
+    system_prompt = (
+        "Translate grocery shopping item names to the target language.\n"
+        "Return JSON only with keys: display_name (string), confidence (number 0..1).\n"
+        "Rules:\n"
+        "- Preserve brand/model codes and product identifiers.\n"
+        "- Keep units/pack info if present.\n"
+        "- If uncertain, keep the original name and use low confidence.\n"
+    )
+    user_prompt = (
+        f"target_language: {target_language}\n"
+        f"item_name: {name}\n"
+        "Return JSON only."
+    )
+
+    payload = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "shopping_item_translation",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+    }
+
+    async with session.post(
+        url,
+        timeout=aiohttp.ClientTimeout(total=30),
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=payload,
+    ) as response:
+        if response.status >= 400:
+            body = await response.text()
+            raise RuntimeError(f"OpenAI HTTP {response.status}: {body[:300]}")
+        data = await response.json()
+
+    out_text = _extract_openai_output_text(data if isinstance(data, dict) else {})
+    obj = _extract_first_json_object(out_text)
+    disp = str(obj.get("display_name") or "").strip()
+    try:
+        conf = float(obj.get("confidence"))
+    except Exception:
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+    if not disp:
+        return None
+    return disp, conf
+
+
+async def _async_translate_name_ollama(
+    *,
+    hass,
+    base_url: str,
+    model: str,
+    name: str,
+    target_language: str,
+) -> tuple[str, float] | None:
+    session = async_get_clientsession(hass)
+    url = _join_url(base_url, "/api/chat")
+    system_prompt = (
+        "Translate grocery shopping item names to the target language.\n"
+        "Return JSON only: {\"display_name\": \"...\", \"confidence\": 0..1}.\n"
+        "Preserve brand/model codes and pack/unit details.\n"
+        "If uncertain, keep original name with low confidence."
+    )
+    user_prompt = f"target_language: {target_language}\nitem_name: {name}\nReturn JSON only."
+    payload = {
+        "model": model,
+        "stream": False,
+        "format": "json",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "options": {"temperature": 0},
+    }
+    async with session.post(
+        url,
+        timeout=aiohttp.ClientTimeout(total=30),
+        json=payload,
+    ) as response:
+        if response.status >= 400:
+            raise RuntimeError(f"Ollama HTTP {response.status}")
+        data = await response.json()
+    msg = data.get("message", {}) if isinstance(data, dict) else {}
+    content = msg.get("content") if isinstance(msg, dict) else ""
+    obj = _extract_first_json_object(content if isinstance(content, str) else "")
+    disp = str(obj.get("display_name") or "").strip()
+    try:
+        conf = float(obj.get("confidence"))
+    except Exception:
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+    if not disp:
+        return None
+    return disp, conf
+
+
+async def _resolve_display_name(
+    *,
+    hass,
+    entry,
+    data,
+    product_id: str,
+    canonical_name: str,
+    translate_enabled: bool,
+    confidence_threshold: float,
+) -> tuple[str, dict[str, Any] | None]:
+    if not translate_enabled:
+        return canonical_name, None
+
+    target_lang = str(getattr(hass.config, "language", "") or "").strip().lower()
+    if not target_lang:
+        return canonical_name, None
+
+    state = data.storage.get_shopping_product_state(product_id)
+    cache = state.get("display_name_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+    cached = cache.get(target_lang)
+    if isinstance(cached, dict):
+        cname = str(cached.get("name") or "").strip()
+        try:
+            cconf = float(cached.get("confidence"))
+        except Exception:
+            cconf = 0.0
+        if cname and cconf >= confidence_threshold:
+            return cname, None
+
+    provider = str(entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or "").strip().lower()
+    model = str(entry.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL) or "").strip()
+    base_url = str(entry.options.get(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL) or "").strip()
+    api_key = str(entry.options.get(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY) or "").strip()
+    if not model:
+        return canonical_name, None
+
+    translated: tuple[str, float] | None = None
+    try:
+        if provider == "openai":
+            if not api_key:
+                return canonical_name, None
+            translated = await _async_translate_name_openai(
+                hass=hass,
+                base_url=base_url or "https://api.openai.com",
+                api_key=api_key,
+                model=model,
+                name=canonical_name,
+                target_language=target_lang,
+            )
+        elif provider == "ollama":
+            translated = await _async_translate_name_ollama(
+                hass=hass,
+                base_url=base_url or "http://host.docker.internal:11434",
+                model=model,
+                name=canonical_name,
+                target_language=target_lang,
+            )
+    except Exception as err:
+        _LOGGER.debug("Shopping-name translation failed for %s: %s", canonical_name, err)
+        translated = None
+
+    if not translated:
+        return canonical_name, None
+
+    translated_name, conf = translated
+    next_cache = dict(cache)
+    next_cache[target_lang] = {
+        "name": translated_name,
+        "confidence": round(float(conf), 3),
+        "updated_at": dt_util.now().isoformat(),
+        "provider": provider,
+        "model": model,
+    }
+    state_update = {"display_name_cache": next_cache}
+    if conf >= confidence_threshold:
+        return translated_name, state_update
+    return canonical_name, state_update
 
 
 def _pct25_75(values: list[float]) -> tuple[float, float] | None:
@@ -423,6 +744,33 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
             DEFAULT_INVENTORY_IMAGES_EVIDENCE_TTL_DAYS,
         )
     )
+    auto_item_marker = str(
+        options.get(CONF_SHOPPING_AUTO_ITEM_MARKER, DEFAULT_SHOPPING_AUTO_ITEM_MARKER) or ""
+    ).strip()
+    auto_item_marker_position = _normalize_marker_position(
+        options.get(
+            CONF_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+            DEFAULT_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+        )
+    )
+    translate_to_ha_language = bool(
+        options.get(
+            CONF_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+            DEFAULT_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+        )
+    )
+    translation_conf_threshold = max(
+        0.5,
+        min(
+            0.99,
+            float(
+                options.get(
+                    CONF_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
+                    DEFAULT_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
+                )
+            ),
+        ),
+    )
 
     now = dt_util.as_local(dt_util.now())
     result: dict[str, Any] = {
@@ -514,6 +862,7 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
     for item in existing_open:
         name = str(item.get("name", "") or "")
         base, _store = _split_store_tag(name)
+        base = _strip_auto_item_marker(base, auto_item_marker, auto_item_marker_position)
         key = _norm_key(base)
         if not key:
             continue
@@ -524,6 +873,28 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
     renamed_rows: list[dict[str, Any]] = []
     state_updates: dict[str, dict[str, Any]] = {}
     state_changes_by_pid: dict[str, dict[str, Any]] = {}
+
+    def _merge_state_update(product_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        if dry_run or not patch:
+            return {}
+        merged = dict(state_updates.get(product_id, {}))
+        merged.update(patch or {})
+        state_updates[product_id] = merged
+        if product_id not in state_changes_by_pid:
+            prev_state = data.storage.get_shopping_product_state(product_id)
+            state_changes_by_pid[product_id] = {
+                "product_id": product_id,
+                "previous": {
+                    "last_auto_added_at": prev_state.get("last_auto_added_at"),
+                    "last_store_tag": prev_state.get("last_store_tag"),
+                    "last_store_tag_confidence": prev_state.get("last_store_tag_confidence"),
+                    "display_name_cache": prev_state.get("display_name_cache"),
+                },
+                "new": dict(merged),
+            }
+        else:
+            state_changes_by_pid[product_id]["new"] = dict(merged)
+        return merged
 
     store_recs: dict[str, dict[str, Any]] = {}
     for cand in candidates:
@@ -541,6 +912,22 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
 
     for cand in sorted(candidates, key=lambda c: c.confidence, reverse=True):
         base_name = cand.name
+        translated_name = base_name
+        translation_state_update = None
+        if not dry_run:
+            translated_name, translation_state_update = await _resolve_display_name(
+                hass=hass,
+                entry=entry,
+                data=data,
+                product_id=cand.product_id,
+                canonical_name=base_name,
+                translate_enabled=translate_to_ha_language,
+                confidence_threshold=translation_conf_threshold,
+            )
+        if translated_name:
+            base_name = translated_name
+        if translation_state_update:
+            _merge_state_update(cand.product_id, translation_state_update)
         base_key = _norm_key(base_name)
         if not base_key:
             continue
@@ -552,9 +939,12 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
         except Exception:
             store_conf = 0.0
 
-        desired_name = base_name
+        desired_base_name = _apply_auto_item_marker(
+            base_name, auto_item_marker, auto_item_marker_position
+        )
+        desired_name = desired_base_name
         if desired_store and store_conf >= STORE_TAG_CONF_THRESHOLD:
-            desired_name = f"{base_name} @ {desired_store}"
+            desired_name = f"{desired_base_name} @ {desired_store}"
 
         existing_item = existing_by_base.get(base_key)
         if existing_item:
@@ -567,7 +957,7 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
                 continue
 
             should_rename = False
-            if desired_name != base_name:
+            if desired_name != desired_base_name:
                 if existing_store is None:
                     should_rename = True
                 else:
@@ -605,17 +995,7 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
                 "last_store_tag": desired_store,
                 "last_store_tag_confidence": round(store_conf, 3),
             }
-            state_updates[cand.product_id] = updated_state
-            prev_state = data.storage.get_shopping_product_state(cand.product_id)
-            state_changes_by_pid[cand.product_id] = {
-                "product_id": cand.product_id,
-                "previous": {
-                    "last_auto_added_at": prev_state.get("last_auto_added_at"),
-                    "last_store_tag": prev_state.get("last_store_tag"),
-                    "last_store_tag_confidence": prev_state.get("last_store_tag_confidence"),
-                },
-                "new": dict(updated_state),
-            }
+            _merge_state_update(cand.product_id, updated_state)
             continue
 
         if dry_run:
@@ -658,17 +1038,7 @@ async def async_run_auto_shopping(hass, entry, data, *, dry_run: bool = False) -
             "last_store_tag": desired_store,
             "last_store_tag_confidence": round(store_conf, 3) if desired_store else None,
         }
-        state_updates[cand.product_id] = updated_state
-        prev_state = data.storage.get_shopping_product_state(cand.product_id)
-        state_changes_by_pid[cand.product_id] = {
-            "product_id": cand.product_id,
-            "previous": {
-                "last_auto_added_at": prev_state.get("last_auto_added_at"),
-                "last_store_tag": prev_state.get("last_store_tag"),
-                "last_store_tag_confidence": prev_state.get("last_store_tag_confidence"),
-            },
-            "new": dict(updated_state),
-        }
+        _merge_state_update(cand.product_id, updated_state)
 
     if state_updates:
         await data.storage.async_bulk_update_shopping_product_state(state_updates)

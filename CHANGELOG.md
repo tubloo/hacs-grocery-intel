@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.2.4 (2026-03-20)
+
+- Shopping automation: added configurable auto-added item marker and marker position (`prefix`/`suffix`) so users can tag items created by auto-shopping runs.
+- Shopping automation: added optional translation of auto-added item names to HA language, with configurable confidence threshold and per-product translation cache.
+- Auto-shopping undo now restores `display_name_cache` along with other per-product shopping state fields.
+- Auto-shopping translation cache now retries translation when cached confidence is below threshold.
+- `run_auto_shopping` dry-run mode no longer calls translation LLMs.
+- Options UI translations now include labels for auto-shopping marker/translation fields.
 
 ## 1.2.3 (2026-03-18)
 

@@ -30,6 +30,10 @@ from .const import (
     CONF_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
     CONF_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
     CONF_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+    CONF_SHOPPING_AUTO_ITEM_MARKER,
+    CONF_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+    CONF_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+    CONF_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
     CONF_INVENTORY_IMAGES_INBOX_PATH,
     CONF_INVENTORY_IMAGES_ARCHIVE_PATH,
     CONF_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
@@ -62,6 +66,10 @@ from .const import (
     DEFAULT_SHOPPING_AUTO_APPROVE_COOLDOWN_DAYS,
     DEFAULT_SHOPPING_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
     DEFAULT_SHOPPING_PAUSE_WHEN_ALL_AWAY,
+    DEFAULT_SHOPPING_AUTO_ITEM_MARKER,
+    DEFAULT_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+    DEFAULT_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+    DEFAULT_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
     DEFAULT_INVENTORY_IMAGES_INBOX_PATH,
     DEFAULT_INVENTORY_IMAGES_ARCHIVE_PATH,
     DEFAULT_INVENTORY_IMAGES_ARCHIVE_TTL_DAYS,
@@ -230,6 +238,8 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
             for key in (
                 CONF_TELEGRAM_BOT_TOKEN,
                 CONF_TELEGRAM_ALLOWED_CHAT_IDS,
+                CONF_SHOPPING_AUTO_ITEM_MARKER,
+                CONF_SHOPPING_AUTO_ITEM_MARKER_POSITION,
             ):
                 self._strip(key)
             return
@@ -503,6 +513,47 @@ class GroceryIntelOptionsFlow(config_entries.OptionsFlow):
                     default=self._opt_default(CONF_SHOPPING_PAUSE_WHEN_ALL_AWAY, DEFAULT_SHOPPING_PAUSE_WHEN_ALL_AWAY),
                 )
             ] = selector.BooleanSelector()
+            fields[
+                vol.Optional(
+                    CONF_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+                    default=self._opt_default(
+                        CONF_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+                        DEFAULT_SHOPPING_TRANSLATE_TO_HA_LANGUAGE,
+                    ),
+                )
+            ] = selector.BooleanSelector()
+            fields[
+                vol.Optional(
+                    CONF_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
+                    default=self._opt_default(
+                        CONF_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
+                        DEFAULT_SHOPPING_TRANSLATION_CONFIDENCE_THRESHOLD,
+                    ),
+                )
+            ] = vol.All(float, vol.Range(min=0.5, max=0.99))
+            fields[
+                vol.Optional(
+                    CONF_SHOPPING_AUTO_ITEM_MARKER,
+                    default=self._opt_default(CONF_SHOPPING_AUTO_ITEM_MARKER, DEFAULT_SHOPPING_AUTO_ITEM_MARKER),
+                )
+            ] = str
+            fields[
+                vol.Optional(
+                    CONF_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+                    default=self._opt_default(
+                        CONF_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+                        DEFAULT_SHOPPING_AUTO_ITEM_MARKER_POSITION,
+                    ),
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": "prefix", "label": "Prefix"},
+                        {"value": "suffix", "label": "Suffix"},
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
             fields[
                 vol.Optional(
                     CONF_TELEGRAM_BOT_TOKEN,

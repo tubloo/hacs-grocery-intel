@@ -45,6 +45,8 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 - Activity log with undo for supported actions
   - Undoing an auto-shopping run restores shopping-list edits and the run's per-product auto-add/store-tag state.
 - Daily auto-add to Home Assistant Shopping List (optional; can tag items like `Eggs @ Willys` when enough store/price history exists)
+  - Optional configurable marker for auto-added item names (prefix/suffix), for example `[Auto] Eggs` or `Eggs [Auto]`.
+  - Optional translation of canonical item names to Home Assistant language (confidence-threshold based, with per-product cache).
 - Inventory images (fridge/pantry/cupboard) inbox + vision analysis (optional)
 - Alcohol item normalization (Beer/Wine/Cider/Spirits)
 
@@ -175,6 +177,10 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
   - `Auto-add cooldown (days)`: default 7
   - `Auto-add confidence threshold`: default 0.75
   - `Pause auto-add when all people away ≥48h`: optional
+  - `Translate auto-added names to HA language`: optional (currently supported for OpenAI and Ollama providers)
+  - `Translation confidence threshold`: default 0.85 (falls back to canonical name below threshold)
+  - `Auto-added item marker`: optional text marker for names added by auto-shopping
+  - `Auto-added marker position`: `prefix` or `suffix`
 - Inventory images (Options):
   - Upload images to `Inventory images inbox path` (default `/media/grocery_intel/inventory_images_inbox`)
   - The integration archives them to `Inventory images archive path` and analyzes them (vision requires a vision-capable LLM; supported providers include `ollama` and `openai`)

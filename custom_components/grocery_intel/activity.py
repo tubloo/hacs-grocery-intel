@@ -145,6 +145,7 @@ class ActivityLog:
                     "last_auto_added_at": prev.get("last_auto_added_at"),
                     "last_store_tag": prev.get("last_store_tag"),
                     "last_store_tag_confidence": prev.get("last_store_tag_confidence"),
+                    "display_name_cache": prev.get("display_name_cache"),
                 }
             if to_update:
                 await receipt_storage.async_bulk_update_shopping_product_state(to_update)
