@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.8 (2026-03-20)
+
+- Packaging fix: corrective release with verified tag-to-manifest alignment for HACS installs.
+
 ## 1.2.7 (2026-03-20)
 
 - Packaging fix: corrective release with aligned tag + manifest version so HACS resolves the intended build.
