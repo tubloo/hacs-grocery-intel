@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.10 (2026-03-22)
+
+- Services: `grocery_intel.add_receipt` and `grocery_intel.update_receipt` now accept manual `receipt_subcategories` input (`[{subcategory,total}, ...]`).
+- Manual subcategory input is validated with category-aware allowed keys and numeric totals (`> 0`).
+- Manual service-provided subcategories now override auto/LLM-derived subcategory assignment for that request.
+
 ## 1.2.9 (2026-03-22)
 
 - Telegram receipt success feedback now includes unknown-subcategory review details:

@@ -129,6 +129,10 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 
 `grocery_intel.add_receipt` and `grocery_intel.update_receipt` accept optional `receipt_category` (`grocery` or `dining`). If omitted on ingestion, Grocery Intel auto-detects a category. Explicit `update_receipt.receipt_category` edits are treated as manual and protected from later automatic reclassification.
 
+Both services also accept optional `receipt_subcategories` as a list of `{subcategory, total}` rows. When provided, these rows are treated as manual overrides and replace auto/LLM-derived subcategories for that request. Validation is category-aware:
+- `grocery` accepts grocery keys (including vice keys such as `tobacco_nicotine`, `alcohol_beer`, `alcohol_wine`, `alcohol_spirits`, `alcohol_cider`).
+- `dining` accepts dining keys (for example `restaurant`, `takeout_pickup`, `delivery_meal`, `fast_food`, `cafe_coffee`, `bar_pub`).
+
 ## Troubleshooting
 
 ### Sensors appear stale / missing recent receipts

@@ -40,7 +40,8 @@ Guidelines:
 - Sources: manual service calls, file inbox scanning, Telegram intake (optional).
 - Optional receipt categorization: `receipt_category` (`grocery` or `dining`) can be set manually and is auto-detected from merchant/file/text hints.
   - Manual `receipt_category` edits are persisted as `receipt_category_source=manual` and protected from automatic reclassification.
-  - Subcategories are persisted in one unified `receipt_subcategories` array (single-row for dining, multi-row for grocery).
+- Subcategories are persisted in one unified `receipt_subcategories` array (single-row for dining, multi-row for grocery).
+  - `add_receipt` and `update_receipt` accept manual `receipt_subcategories` overrides (`[{subcategory,total}, ...]`) with category-aware validation.
 - Receipts inbox → archive:
   - Inbox: `/media/grocery_intel/receipts_inbox`
   - Archive: `/media/grocery_intel/receipts_archive`

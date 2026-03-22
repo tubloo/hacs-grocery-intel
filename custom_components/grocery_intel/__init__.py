@@ -361,6 +361,39 @@ def _sanitize_receipt_subcategories(
     ]
 
 
+def _allowed_subcategories_for_category(category: str | None) -> set[str]:
+    if category == RECEIPT_CATEGORY_GROCERY:
+        return _ALLOWED_GROCERY_SUBCATEGORIES
+    if category == RECEIPT_CATEGORY_EATING_OUT:
+        return _ALLOWED_EATING_OUT_SUBCATEGORIES
+    return _ALLOWED_RECEIPT_SUBCATEGORIES
+
+
+def _validate_manual_receipt_subcategories(
+    value: Any, *, category: str | None
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("receipt_subcategories must be a list of {subcategory, total}")
+    allowed = _allowed_subcategories_for_category(category)
+    rows: list[dict[str, Any]] = []
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError("receipt_subcategories entries must be objects")
+        name = _sanitize_subcategory_name(row.get("subcategory"))
+        if not name:
+            raise ValueError(f"Invalid subcategory: {row.get('subcategory')}")
+        if name not in allowed:
+            raise ValueError(f"Subcategory '{name}' is not allowed for receipt_category '{category}'")
+        try:
+            amount = float(row.get("total"))
+        except Exception:
+            raise ValueError(f"Invalid total for subcategory '{name}'")
+        if amount <= 0:
+            raise ValueError(f"Subcategory '{name}' total must be > 0")
+        rows.append({"subcategory": name, "total": round(amount, 2)})
+    return rows
+
+
 def _apply_auto_receipt_subcategories(updates: dict[str, Any], receipt: dict[str, Any]) -> None:
     def _set_if_changed(field: str, value: Any) -> None:
         current = updates.get(field) if field in updates else receipt.get(field)
@@ -380,6 +413,13 @@ def _apply_auto_receipt_subcategories(updates: dict[str, Any], receipt: dict[str
         total = float(total_raw) if total_raw is not None else None
     except Exception:
         total = None
+
+    if "receipt_subcategories" in updates:
+        rows = _sanitize_receipt_subcategories(updates.get("receipt_subcategories"))
+        allowed = _allowed_subcategories_for_category(receipt_category)
+        rows = [row for row in rows if str(row.get("subcategory") or "").strip() in allowed]
+        _set_if_changed("receipt_subcategories", rows)
+        return
 
     has_new_evidence = bool(llm_receipt_subcategories)
     existing_rows = (
@@ -834,6 +874,13 @@ def _register_services(hass: HomeAssistant) -> None:
         },
         extra=vol.ALLOW_EXTRA,
     )
+    receipt_subcategory_schema = vol.Schema(
+        {
+            vol.Required("subcategory"): cv.string,
+            vol.Required("total"): vol.Coerce(float),
+        },
+        extra=vol.ALLOW_EXTRA,
+    )
 
     def _validate_receipt_category(value: Any) -> str:
         raw = str(value or "").strip()
@@ -861,6 +908,22 @@ def _register_services(hass: HomeAssistant) -> None:
         )
         raw_text = call.data.get("raw_text")
         line_items = call.data.get("line_items")
+        manual_receipt_subcategories = call.data.get("receipt_subcategories")
+        resolved_receipt_category = receipt_category or _infer_receipt_category(
+            store_name=_safe_str(store),
+            filename=None,
+            raw_text=_safe_str(raw_text),
+            ocr_text=None,
+        )
+        if manual_receipt_subcategories is not None:
+            try:
+                manual_receipt_subcategories = _validate_manual_receipt_subcategories(
+                    manual_receipt_subcategories,
+                    category=resolved_receipt_category,
+                )
+            except ValueError as err:
+                _LOGGER.warning("Invalid receipt_subcategories in add_receipt: %s", err)
+                return
 
         entry = _get_entry(hass)
         currency = None
@@ -872,13 +935,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 total=total,
                 date_str=date_str,
                 store=store,
-                receipt_category=receipt_category
-                or _infer_receipt_category(
-                    store_name=_safe_str(store),
-                    filename=None,
-                    raw_text=_safe_str(raw_text),
-                    ocr_text=None,
-                ),
+                receipt_category=resolved_receipt_category,
                 raw_text=raw_text,
                 currency=currency,
                 line_items=line_items,
@@ -903,6 +960,9 @@ def _register_services(hass: HomeAssistant) -> None:
 
         merged_receipt = dict(receipt)
         merged_receipt.update(post_updates)
+        if manual_receipt_subcategories is not None:
+            post_updates["receipt_subcategories"] = manual_receipt_subcategories
+            merged_receipt["receipt_subcategories"] = post_updates["receipt_subcategories"]
         _apply_auto_receipt_subcategories(post_updates, merged_receipt)
         if post_updates:
             await data.storage.async_update_receipt(receipt["id"], post_updates)
@@ -998,6 +1058,17 @@ def _register_services(hass: HomeAssistant) -> None:
                 updates["store_name"] = canonical
 
         _apply_auto_receipt_category(updates, receipt)
+        if "receipt_subcategories" in call.data:
+            try:
+                updates["receipt_subcategories"] = _validate_manual_receipt_subcategories(
+                    call.data.get("receipt_subcategories"),
+                    category=_normalize_receipt_category(
+                        updates.get("receipt_category", receipt.get("receipt_category"))
+                    ),
+                )
+            except ValueError as err:
+                _LOGGER.warning("Invalid receipt_subcategories for receipt_id=%s: %s", receipt_id, err)
+                return
         _apply_auto_receipt_subcategories(updates, receipt)
         await data.storage.async_update_receipt(receipt_id, updates)
 
@@ -1731,6 +1802,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("receipt_category"): _validate_receipt_category,
                 vol.Optional("raw_text"): cv.string,
                 vol.Optional("line_items"): vol.All(cv.ensure_list, [line_item_schema]),
+                vol.Optional("receipt_subcategories"): vol.All(cv.ensure_list, [receipt_subcategory_schema]),
             }
         ),
     )
@@ -1747,6 +1819,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("currency"): cv.string,
                 vol.Optional("receipt_category"): _validate_receipt_category,
                 vol.Optional("line_items"): vol.All(cv.ensure_list, [line_item_schema]),
+                vol.Optional("receipt_subcategories"): vol.All(cv.ensure_list, [receipt_subcategory_schema]),
                 vol.Optional("clear_line_items", default=False): cv.boolean,
                 vol.Optional("reprocess", default=True): cv.boolean,
             }

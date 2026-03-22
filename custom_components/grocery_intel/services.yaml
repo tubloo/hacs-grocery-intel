@@ -44,6 +44,12 @@ add_receipt:
       required: false
       selector:
         object:
+    receipt_subcategories:
+      name: Receipt subcategories
+      description: Manual subcategory rows as a list of objects (`subcategory`, `total`). Overrides auto/LLM subcategories for this receipt.
+      required: false
+      selector:
+        object:
 
 update_receipt:
   name: Update receipt
@@ -91,6 +97,12 @@ update_receipt:
     line_items:
       name: Line items
       description: Replace line items with a list of objects (raw_name, line_total, qty_raw, unit_price_raw).
+      required: false
+      selector:
+        object:
+    receipt_subcategories:
+      name: Receipt subcategories
+      description: Replace receipt subcategory rows with a list of objects (`subcategory`, `total`). Must use allowed keys for the receipt category.
       required: false
       selector:
         object:
