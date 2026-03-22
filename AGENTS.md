@@ -46,6 +46,7 @@ Guidelines:
   - Archive: `/media/grocery_intel/receipts_archive`
   - Defaults: scan interval 300s; archive TTL 30 days (configurable)
   - Dedupe is SHA-256 content-based; duplicates archived with a `_duplicate` suffix.
+  - Telegram receipt completion feedback includes receipt summary and unknown-subcategory review details; very long messages are split into continuation messages only when they exceed Telegram limits.
 
 ### Extraction pipeline (receipts)
 
@@ -108,6 +109,18 @@ Guidelines:
 - When asked to make a release:
   - Request confirmation immediately before running any tagging/release commands.
   - Update documentation as needed (at minimum `README.md`, `custom_components/grocery_intel/services.yaml`, and `AGENTS.md`).
+  - Follow this strict sequence to avoid tag/manifest drift:
+    1. Update `custom_components/grocery_intel/manifest.json` to the target release version.
+    2. Update `CHANGELOG.md` for that exact version/date.
+    3. Run compile check (`python3 -m py_compile custom_components/grocery_intel/*.py`).
+    4. Commit release changes.
+    5. Push `main` and verify local/remote alignment (`git rev-parse HEAD` equals `git rev-parse origin/main`).
+    6. Create annotated tag from the verified `HEAD` (`git tag -a vX.Y.Z ...`).
+    7. Push the tag.
+    8. Create GitHub release from that tag.
+    9. Verify post-release that tag content is correct (at minimum: `manifest.json` version under `ref=vX.Y.Z` matches `X.Y.Z`).
+    10. Verify `main` and `origin/main` still match after release commands.
+  - Never create/publish a release from a tag that already existed with mismatched contents; bump to a new patch version instead.
   - Provide a crisp summary of what changed (user-facing + developer-facing).
 
 ## Release numbering strategy

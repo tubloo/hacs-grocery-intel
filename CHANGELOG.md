@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.9 (2026-03-22)
+
+- Telegram receipt success feedback now includes unknown-subcategory review details:
+  - Shows `Unknown subcategory items: none` when fully mapped.
+  - Otherwise includes all extracted line items for review.
+  - Auto-splits into continuation messages only if the Telegram 4096-character limit is exceeded.
+
 ## 1.2.8 (2026-03-20)
 
 - Packaging fix: corrective release with verified tag-to-manifest alignment for HACS installs.

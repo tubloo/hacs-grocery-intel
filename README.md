@@ -212,6 +212,10 @@ You can ingest receipts and inventory images from Telegram by calling `grocery_i
   - `Telegram auto-detect receipt vs inventory`: when enabled, PDFs default to receipts; images use caption keywords first (e.g., `receipt`, `inventory`, `fridge`, `pantry`) and may use your configured LLM (OpenAI/Ollama vision) to classify when available
   - `Telegram send analysis feedback`: replies in Telegram when queued and when analysis completes/fails (timestamps are formatted in Home Assistant local time)
     - Receipt completion feedback includes the detected receipt category (`Grocery` or `Dining`).
+    - Receipt completion feedback now also includes unknown-subcategory review details:
+      - `Unknown subcategory items: none` when fully mapped.
+      - Otherwise includes all extracted line items for review in the same message.
+      - If the message exceeds Telegram's 4096-character limit, it is automatically sent as continuation messages (`continued 2/N`, etc.).
   - Limits:
     - Telegram ingests reject files larger than **25 MB** (to avoid large in-memory downloads inside Home Assistant).
 

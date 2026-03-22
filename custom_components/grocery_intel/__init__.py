@@ -2409,6 +2409,121 @@ def _get_telegram_settings(entry: ConfigEntry) -> tuple[str, bool]:
     return token, enabled
 
 
+def _is_unknown_subcategory_name(value: Any) -> bool:
+    raw = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return raw in {
+        "",
+        "unknown",
+        "uncategorized",
+        "unclassified",
+        "other",
+        "none",
+        "null",
+        "misc",
+        "miscellaneous",
+    }
+
+
+def _build_unknown_subcategory_item_lines(
+    receipt: dict[str, Any], *, currency: str
+) -> tuple[int, list[str]]:
+    sub_rows = receipt.get("receipt_subcategories")
+    if not isinstance(sub_rows, list):
+        sub_rows = []
+
+    unknown_total = 0.0
+    for row in sub_rows:
+        if not isinstance(row, dict):
+            continue
+        if not _is_unknown_subcategory_name(row.get("subcategory")):
+            continue
+        try:
+            unknown_total += float(row.get("total") or 0.0)
+        except Exception:
+            continue
+
+    if unknown_total <= 0.0:
+        return 0, []
+
+    items = receipt.get("line_items_raw")
+    if not isinstance(items, list):
+        items = []
+
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = _safe_str(item.get("raw_name")) or "Unknown item"
+        qty_raw = _safe_str(item.get("qty_raw")) or ""
+        total_txt = ""
+        try:
+            amount = float(item.get("line_total"))
+            total_txt = f"{amount:.2f} {currency}".strip()
+        except Exception:
+            total_txt = _safe_str(item.get("line_total")) or ""
+            if total_txt and currency:
+                total_txt = f"{total_txt} {currency}".strip()
+        parts = [name]
+        if qty_raw:
+            parts.append(f"qty {qty_raw}")
+        if total_txt:
+            parts.append(total_txt)
+        lines.append("- " + " | ".join(parts))
+
+    if not lines:
+        lines.append("- No line items extracted for this receipt.")
+    return len(lines), lines
+
+
+def _split_telegram_message(text: str, *, limit: int = 4096) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    lines = text.splitlines()
+    chunks: list[str] = []
+    cur = ""
+
+    for line in lines:
+        candidate = line if not cur else f"{cur}\n{line}"
+        if len(candidate) <= limit:
+            cur = candidate
+            continue
+        if cur:
+            chunks.append(cur)
+            cur = ""
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        cur = line
+
+    if cur:
+        chunks.append(cur)
+    return chunks or [text[:limit]]
+
+
+async def _async_telegram_send_message_wrapped(
+    hass: HomeAssistant,
+    *,
+    token: str,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+) -> None:
+    parts = _split_telegram_message(text, limit=4096)
+    total = len(parts)
+    for idx, part in enumerate(parts, start=1):
+        msg = part
+        if total > 1 and idx > 1:
+            msg = f"(continued {idx}/{total})\n{part}"
+        await _async_telegram_send_message(
+            hass,
+            token=token,
+            chat_id=chat_id,
+            text=msg,
+            reply_to_message_id=reply_to_message_id if idx == 1 else None,
+        )
+
+
 async def _async_maybe_notify_telegram_receipt(
     data: GroceryIntelData,
     *,
@@ -2449,6 +2564,7 @@ async def _async_maybe_notify_telegram_receipt(
             total_str = f"{float(total):.2f} {currency}".strip() if total is not None else "Unknown total"
         except Exception:
             total_str = f"{total} {currency}".strip() if total is not None else "Unknown total"
+        unknown_n, unknown_lines = _build_unknown_subcategory_item_lines(receipt, currency=currency)
         text = (
             f"Receipt analyzed: {filename}\n"
             f"- Receipt ID: {rid}\n"
@@ -2456,12 +2572,15 @@ async def _async_maybe_notify_telegram_receipt(
             f"- Store: {store}\n"
             f"- When: {purchased_at}\n"
             f"- Total: {total_str}\n"
-            f"- Line items: {items_n}"
+            f"- Line items: {items_n}\n"
+            f"- Unknown subcategory items: {unknown_n if unknown_n else 'none'}"
         )
+        if unknown_lines:
+            text += "\n\nUnknown subcategory items:\n" + "\n".join(unknown_lines)
     else:
         text = f"Receipt failed: {filename}\nReason: {reason or 'unknown'}"
 
-    await _async_telegram_send_message(
+    await _async_telegram_send_message_wrapped(
         hass,
         token=token,
         chat_id=chat_id,
