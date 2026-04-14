@@ -3178,7 +3178,7 @@ async def _async_run_llm_for_receipt_file(
     if not force and receipt.get("extract_status") in {"done", "running"}:
         return
 
-    file_path = receipt.get("file_path")
+    file_path = _safe_str(receipt.get("file_path"))
     if not file_path:
         await _async_mark_extract_failed(data, receipt, "Missing receipt file path")
         return
@@ -3190,7 +3190,7 @@ async def _async_run_llm_for_receipt_file(
         await _async_mark_extract_failed(data, receipt, "Receipt file missing")
         return
 
-    filename = receipt.get("filename") or os.path.basename(file_path)
+    filename = _safe_str(receipt.get("filename")) or os.path.basename(file_path)
     ext = os.path.splitext(filename)[1].lower()
 
     def _store_needs_help(store_name: str | None) -> bool:
@@ -3498,11 +3498,16 @@ async def _async_run_llm_for_receipt_file(
                                 if parsed is not None:
                                     updates["total"] = float(parsed)
 
-                        purchased_val = _safe_str(combined_fields.get("purchased_at")) or ""
-                        if purchased_val and should_set("purchased_at"):
-                            parsed_dt = _parse_date_from_text(purchased_val)
-                            if parsed_dt is not None:
-                                updates["purchased_at"] = parsed_dt.isoformat()
+                        if should_set("purchased_at"):
+                            purchased_val = _safe_str(combined_fields.get("purchased_at")) or ""
+                            parsed_dt = _parse_date_from_text(
+                                purchased_val,
+                                filename=filename,
+                                profile=profile,
+                            )
+                            updates["purchased_at"] = (
+                                parsed_dt if parsed_dt is not None else dt_util.now()
+                            ).isoformat()
                         llm_receipt_category = _normalize_receipt_category(combined_fields.get("receipt_category"))
                         if llm_receipt_category is not None:
                             updates["receipt_category_llm"] = llm_receipt_category
@@ -3807,11 +3812,16 @@ async def _async_run_llm_for_receipt_file(
                             if parsed is not None:
                                 updates["total"] = float(parsed)
 
-                    purchased_val = _safe_str(combined_fields.get("purchased_at")) or ""
-                    if purchased_val and should_set("purchased_at"):
-                        parsed_dt = _parse_date_from_text(purchased_val)
-                        if parsed_dt is not None:
-                            updates["purchased_at"] = parsed_dt.isoformat()
+                    if should_set("purchased_at"):
+                        purchased_val = _safe_str(combined_fields.get("purchased_at")) or ""
+                        parsed_dt = _parse_date_from_text(
+                            purchased_val,
+                            filename=filename,
+                            profile=profile,
+                        )
+                        updates["purchased_at"] = (
+                            parsed_dt if parsed_dt is not None else dt_util.now()
+                        ).isoformat()
                     llm_receipt_category = _normalize_receipt_category(combined_fields.get("receipt_category"))
                     if llm_receipt_category is not None:
                         updates["receipt_category_llm"] = llm_receipt_category
@@ -3886,13 +3896,17 @@ def _read_receipt_image_base64_and_mime_sync(path: str) -> tuple[str, str]:
     succeeds we return JPEG bytes + `image/jpeg`. Otherwise we return the
     original bytes + a mime inferred from filename.
     """
-    ext = os.path.splitext(path)[1].lower()
+    safe_path = _safe_str(path)
+    if not safe_path:
+        return "", "image/jpeg"
+
+    ext = os.path.splitext(safe_path)[1].lower()
     if ext in HEIC_EXTENSIONS:
-        raw = _convert_heic_to_jpeg_bytes_sync(path)
+        raw = _convert_heic_to_jpeg_bytes_sync(safe_path)
         base_mime = "image/jpeg"
     else:
         try:
-            with open(path, "rb") as f:
+            with open(safe_path, "rb") as f:
                 raw = f.read()
         except Exception:
             raw = b""
@@ -3906,7 +3920,7 @@ def _read_receipt_image_base64_and_mime_sync(path: str) -> tuple[str, str]:
     if not raw:
         return "", "image/jpeg"
 
-    processed = _preprocess_receipt_image_bytes_sync(raw, filename=os.path.basename(path))
+    processed = _preprocess_receipt_image_bytes_sync(raw, filename=os.path.basename(safe_path))
     if processed:
         return base64.b64encode(processed).decode("ascii"), "image/jpeg"
 

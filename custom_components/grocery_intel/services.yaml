@@ -157,7 +157,7 @@ scan_receipts_inbox:
 
 run_extraction:
   name: Run Extraction
-  description: Run receipt extraction for pending receipts or a specific receipt using the LLM pipeline.
+  description: Run receipt extraction for pending receipts or a specific receipt using the LLM pipeline. If extraction cannot parse a receipt date, purchased_at falls back to current Home Assistant local datetime.
   fields:
     receipt_id:
       name: Receipt ID

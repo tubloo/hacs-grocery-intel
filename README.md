@@ -157,6 +157,7 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
   - Images (`.jpg/.png/.webp/.heic/.heif`) are sent to a vision-capable LLM when `llm_provider=ollama` or `llm_provider=openai`.
   - PDFs are parsed from their text layer (via `pypdf`). If the PDF has no text layer, you'll need to OCR/convert it outside Home Assistant (the integration avoids heavy native dependencies).
   - The integration asks the LLM for `total`, `store_name`, `purchased_at`, `receipt_category`, `receipt_subcategories`, and `line_items` (best-effort). For images/PDF-vision it will do a second “line items only” pass to improve extraction.
+  - If vision extraction cannot produce a usable `purchased_at`, Grocery Intel falls back to current Home Assistant local datetime.
 - Optional: `LLM extra instructions` lets you add fine-tuning instructions; the integration always enforces a JSON-only contract and appends your instructions.
 - Optional: `Receipt category LLM prompt` lets you add custom classification guidance specifically for `receipt_category` (`grocery` vs `dining`) when LLM extraction runs.
 - `reparse_receipts` works from stored receipt text (no file read), uses LLM parsing, and refreshes category/subcategory fields from the latest parsing logic.

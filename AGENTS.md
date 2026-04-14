@@ -56,6 +56,7 @@ Guidelines:
 - Status lifecycle: `pending` / `queued` / `running` / `done` / `failed`.
 - PDFs attempt text-layer extraction first; may fall back to rendering + vision.
 - Images go to vision-capable extraction when configured.
+- If vision extraction cannot parse `purchased_at`, it falls back to current Home Assistant local datetime.
 - Prompts enforce structured JSON output.
 - Missing archived files are treated as failures to avoid retry loops.
 - `reparse_receipts` supports optional `since` / `until` purchased-date filters (inclusive; date-only `until` includes full local day).

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.11 (2026-04-14)
+
+- Fix LLM image parsing robustness for receipt files by coercing file path/filename inputs to safe strings before path operations.
+- Fix missing-date behavior for vision extraction: when a receipt image/PDF-vision parse has no usable `purchased_at`, Grocery Intel now falls back to current Home Assistant local datetime so the receipt is visible in date-driven dashboard sensors.
+
 ## 1.2.10 (2026-03-22)
 
 - Services: `grocery_intel.add_receipt` and `grocery_intel.update_receipt` now accept manual `receipt_subcategories` input (`[{subcategory,total}, ...]`).
