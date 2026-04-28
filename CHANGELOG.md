@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.12 (2026-04-28)
+
+- Auto-shopping: fixed confidence calibration so products at the documented minimum history (`3` observations) can qualify for auto-add when cadence is stable.
+- Services/runtime: fixed Grocery Intel config-entry resolution for service handlers so calls like `grocery_intel.run_auto_shopping` use a loaded entry/data instance instead of potentially early-returning when multiple entries exist.
+
 ## 1.2.11 (2026-04-14)
 
 - Fix LLM image parsing robustness for receipt files by coercing file path/filename inputs to safe strings before path operations.

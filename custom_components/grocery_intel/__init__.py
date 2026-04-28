@@ -1964,16 +1964,28 @@ def _get_entry(hass: HomeAssistant) -> ConfigEntry | None:
     entries = hass.config_entries.async_entries(DOMAIN)
     if not entries:
         return None
+    domain_data = hass.data.get(DOMAIN, {})
+    for entry in entries:
+        if entry.entry_id in domain_data:
+            return entry
     return entries[0]
 
 
 def _get_data(hass: HomeAssistant) -> GroceryIntelData | None:
-    entry = _get_entry(hass)
-    if not entry:
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
         _LOGGER.error("No config entry found for Grocery Intel")
         return None
-
-    return hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    domain_data = hass.data.get(DOMAIN, {})
+    for entry in entries:
+        data = domain_data.get(entry.entry_id)
+        if data is not None:
+            return data
+    _LOGGER.error(
+        "Grocery Intel config entries exist but none are loaded in hass.data (entry_ids=%s)",
+        [e.entry_id for e in entries],
+    )
+    return None
 
 
 def _coerce_int(value: Any) -> int | None:

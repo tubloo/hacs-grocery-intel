@@ -46,6 +46,7 @@ from .shopping_list_api import async_add_item, async_get_items, async_update_ite
 AUTO_RUN_HOUR_LOCAL = 7
 AWAY_MIN_HOURS = 48
 MIN_PURCHASES = 3
+CONFIDENCE_HISTORY_FULL_AT_PURCHASES = 8
 
 # Store recommendation + tagging (for auto-added items).
 STORE_RECO_LOOKBACK_DAYS = 120
@@ -120,7 +121,9 @@ def _compute_level_and_confidence(purchase_dts: list) -> tuple[str, float, float
 
     mad = float(median([abs(x - cadence) for x in deltas])) if deltas else 0.0
     stability = 1.0 - min(1.0, (mad / cadence)) if cadence > 0 else 0.0
-    history = min(1.0, len(purchase_dts) / 10.0)
+    # Calibrate history so products at MIN_PURCHASES can still meet the default
+    # threshold when cadence is stable, matching the documented 3-observation minimum.
+    history = min(1.0, len(purchase_dts) / float(CONFIDENCE_HISTORY_FULL_AT_PURCHASES))
     confidence = max(0.0, min(1.0, 0.6 * stability + 0.4 * history))
 
     return level, confidence, cadence, days_since_last
