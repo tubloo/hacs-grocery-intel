@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.13 (2026-04-28)
+
+- Shopping list compatibility: `auto_shopping` now falls back to the `shopping_list.add_item` service when the direct `shopping_list.async_add_item` helper is unavailable on a Home Assistant build.
+- Fallback add flow now resolves the created shopping-list row from before/after list diffs so auto-added items retain IDs for activity undo/state tracking.
+
 ## 1.2.12 (2026-04-28)
 
 - Auto-shopping: fixed confidence calibration so products at the documented minimum history (`3` observations) can qualify for auto-add when cadence is stable.
