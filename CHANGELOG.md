@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.14 (2026-05-09)
+
+- Auto-shopping dedupe hardening: when direct shopping-list item reads are unavailable on a Home Assistant build, Grocery Intel now falls back to `todo.get_items` for open shopping list entries before deciding what to auto-add.
+- Prevents repeated daily re-add of items already present by preserving existing-item detection across shopping-list API variations.
+
 ## 1.2.13 (2026-04-28)
 
 - Shopping list compatibility: `auto_shopping` now falls back to the `shopping_list.add_item` service when the direct `shopping_list.async_add_item` helper is unavailable on a Home Assistant build.
