@@ -78,6 +78,7 @@ from .const import (
     DEFAULT_RECEIPT_CATEGORY_LLM_PROMPT,
     DEFAULT_AZURE_API_VERSION,
     SERVICE_ADD_RECEIPT,
+    SERVICE_DELETE_RECEIPT,
     SERVICE_UNDO_ACTIVITY,
     SERVICE_REPROCESS_RECEIPTS,
     SERVICE_SCAN_RECEIPTS_INBOX,
@@ -1105,6 +1106,39 @@ def _register_services(hass: HomeAssistant) -> None:
 
         data.request_refresh()
 
+    async def handle_delete_receipt(call: ServiceCall) -> None:
+        data = _get_data(hass)
+        if data is None:
+            return
+
+        receipt_id = str(call.data["receipt_id"]).strip()
+        if not receipt_id:
+            _LOGGER.warning("delete_receipt called with empty receipt_id")
+            return
+
+        receipt = await data.storage.async_get_receipt(receipt_id)
+        if not receipt:
+            _LOGGER.warning("Receipt not found: %s", receipt_id)
+            return
+
+        ok = await data.storage.async_delete_receipt(receipt_id)
+        if not ok:
+            _LOGGER.warning("Failed to delete receipt: %s", receipt_id)
+            return
+
+        await data.activity.async_add_activity(
+            kind="receipt_deleted",
+            description=f"Receipt deleted: {receipt.get('filename') or receipt_id}",
+            payload={
+                "receipt_id": receipt_id,
+                "filename": receipt.get("filename"),
+                "purchased_at": receipt.get("purchased_at"),
+                "store_name": receipt.get("store_name"),
+                "total": receipt.get("total"),
+            },
+        )
+        data.request_refresh()
+
     async def handle_undo_activity(call: ServiceCall) -> None:
         data = _get_data(hass)
         if data is None:
@@ -1827,6 +1861,12 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
     _reg(
+        SERVICE_DELETE_RECEIPT,
+        handle_delete_receipt,
+        vol.Schema({vol.Required("receipt_id"): cv.string}),
+    )
+
+    _reg(
         SERVICE_UNDO_ACTIVITY,
         handle_undo_activity,
         vol.Schema({vol.Required("activity_id"): cv.string}),
@@ -1944,6 +1984,7 @@ def _register_services(hass: HomeAssistant) -> None:
 def _unregister_services(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_ADD_RECEIPT)
     hass.services.async_remove(DOMAIN, SERVICE_UPDATE_RECEIPT)
+    hass.services.async_remove(DOMAIN, SERVICE_DELETE_RECEIPT)
     hass.services.async_remove(DOMAIN, SERVICE_UNDO_ACTIVITY)
     hass.services.async_remove(DOMAIN, SERVICE_REPROCESS_RECEIPTS)
     hass.services.async_remove(DOMAIN, SERVICE_SCAN_RECEIPTS_INBOX)

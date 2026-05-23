@@ -112,6 +112,7 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 ## Services
 - `grocery_intel.add_receipt`
 - `grocery_intel.update_receipt`
+- `grocery_intel.delete_receipt`
 - `grocery_intel.undo_activity`
 - `grocery_intel.scan_receipts_inbox`
 - `grocery_intel.run_extraction`
@@ -128,6 +129,8 @@ List-style sensors: the state is a count, and details are in the `items` attribu
 - `grocery_intel.dedupe_stores` (dry-run by default; merges duplicate store entities and updates receipts)
 
 `grocery_intel.add_receipt` and `grocery_intel.update_receipt` accept optional `receipt_category` (`grocery` or `dining`). If omitted on ingestion, Grocery Intel auto-detects a category. Explicit `update_receipt.receipt_category` edits are treated as manual and protected from later automatic reclassification.
+
+`grocery_intel.delete_receipt` removes a specific receipt by `receipt_id` and also removes its derived line items/observations from analytics.
 
 Both services also accept optional `receipt_subcategories` as a list of `{subcategory, total}` rows. When provided, these rows are treated as manual overrides and replace auto/LLM-derived subcategories for that request. Validation is category-aware:
 - `grocery` accepts grocery keys (including vice keys such as `tobacco_nicotine`, `alcohol_beer`, `alcohol_wine`, `alcohol_spirits`, `alcohol_cider`).

@@ -85,6 +85,7 @@ DEFAULT_TELEGRAM_SEND_FEEDBACK = True
 DEFAULT_EXPORTS_PATH = "/media/grocery_intel/exports"
 
 SERVICE_ADD_RECEIPT = "add_receipt"
+SERVICE_DELETE_RECEIPT = "delete_receipt"
 SERVICE_UNDO_ACTIVITY = "undo_activity"
 SERVICE_REPROCESS_RECEIPTS = "reprocess_receipts"
 SERVICE_SCAN_RECEIPTS_INBOX = "scan_receipts_inbox"

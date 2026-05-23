@@ -119,6 +119,17 @@ update_receipt:
       selector:
         boolean:
 
+delete_receipt:
+  name: Delete receipt
+  description: Delete a receipt and its derived line items/observations, then refresh analytics.
+  fields:
+    receipt_id:
+      name: Receipt ID
+      description: Receipt ID to delete.
+      required: true
+      selector:
+        text:
+
 undo_activity:
   name: Undo activity
   description: Undo a previous activity (e.g., receipt add/import or extraction completion/failure). For auto-shopping runs, this also restores the run's per-product shopping state metadata.

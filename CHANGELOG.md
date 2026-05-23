@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0 (2026-05-23)
+
+- Services: added `grocery_intel.delete_receipt` to remove a receipt by `receipt_id` directly.
+- Receipt deletion now removes derived line items and observations for that receipt, with analytics refresh and `receipt_deleted` activity logging.
+- Docs/schema updated in `README.md`, `services.yaml`, and `AGENTS.md` for the new deletion workflow.
+
 ## 1.2.14 (2026-05-09)
 
 - Auto-shopping dedupe hardening: when direct shopping-list item reads are unavailable on a Home Assistant build, Grocery Intel now falls back to `todo.get_items` for open shopping list entries before deciding what to auto-add.

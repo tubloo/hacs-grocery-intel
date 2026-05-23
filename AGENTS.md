@@ -38,6 +38,7 @@ Guidelines:
 ### Receipt ingestion
 
 - Sources: manual service calls, file inbox scanning, Telegram intake (optional).
+- Receipts can be removed explicitly via `delete_receipt` by `receipt_id` (this also removes derived line items/observations).
 - Optional receipt categorization: `receipt_category` (`grocery` or `dining`) can be set manually and is auto-detected from merchant/file/text hints.
   - Manual `receipt_category` edits are persisted as `receipt_category_source=manual` and protected from automatic reclassification.
 - Subcategories are persisted in one unified `receipt_subcategories` array (single-row for dining, multi-row for grocery).
