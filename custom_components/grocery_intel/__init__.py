@@ -629,6 +629,7 @@ class GroceryIntelData:
     unsub_scan: callable | None = None
     unsub_auto_shopping: callable | None = None
     unsub_inventory_images_scan: callable | None = None
+    unsub_llm_api: callable | None = None
     unsub_debounced_refresh: callable | None = None
     debounced_refresh_scheduled_at: float | None = None
     unsub_refresh_failsafe: callable | None = None
@@ -787,6 +788,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ocr_semaphore=asyncio.Semaphore(2),
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
+    try:
+        from .llm import async_register_llm_api
+
+        data.unsub_llm_api = async_register_llm_api(hass)
+    except ImportError:
+        _LOGGER.debug("Home Assistant LLM API is not available; skipping Grocery Intel LLM API")
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -851,6 +858,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data.unsub_auto_shopping()
         if data and data.unsub_inventory_images_scan:
             data.unsub_inventory_images_scan()
+        if data and data.unsub_llm_api:
+            data.unsub_llm_api()
         if data:
             data.cancel_pending_refresh()
 

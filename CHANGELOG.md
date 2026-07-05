@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 (2026-07-05)
+
+- MCP/LLM: register Grocery Intel as a selectable Home Assistant LLM API named `Grocery Intel`, so Home Assistant MCP Server can expose the read-only Grocery Intel tools when that API is selected.
+- Compatibility: keep LLM API registration lazy so older Home Assistant installs without LLM/MCP support can still load the integration.
+- Docs: clarified that the Home Assistant MCP Server configuration must include the `Grocery Intel` LLM API, optionally alongside `Assist`.
+
 ## 1.4.0 (2026-07-05)
 
 - LLM/MCP: added a read-only public read model for Grocery Intel data, exposed through Home Assistant's LLM tool surface for use by Home Assistant MCP clients.

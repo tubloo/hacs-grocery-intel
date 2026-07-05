@@ -81,6 +81,12 @@ Grocery Intel exposes a read-only public read model through Home Assistant's LLM
 
 The public model is versioned separately from internal storage and is designed for open-ended consumers such as LLM agents, notebooks, local scripts, dashboards, and BI tools.
 
+To expose Grocery Intel through Home Assistant MCP:
+- Update Grocery Intel and restart Home Assistant.
+- Add or reconfigure the Home Assistant **Model Context Protocol Server** integration.
+- In the LLM API selector, include **Grocery Intel**. Select **Assist** too if you also want the standard Home Assistant control tools.
+- Reconnect the MCP client so it refreshes the tool list.
+
 - `GroceryIntelDescribeSchema`: returns datasets, fields, relationships, filter operators, aggregation options, and privacy scopes.
 - `GroceryIntelQuery`: reads rows from a dataset with filters, sorting, pagination, field selection, and optional related-record inclusion.
 - `GroceryIntelAggregate`: performs generic group-by analytics with metrics such as `count`, `sum`, `avg`, `min`, and `max`, plus optional day/week/month/year buckets.

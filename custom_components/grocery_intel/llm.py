@@ -1,14 +1,14 @@
 """LLM tools for Grocery Intel."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import llm
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.llm import LLMContext
+from homeassistant.helpers import llm
 
 from .const import DOMAIN
 from .read_model import (
@@ -53,6 +53,10 @@ async def _async_read_model(hass: HomeAssistant, scope: str) -> dict[str, Any]:
     return await async_build_public_read_model(data, scope=scope)
 
 
+LLM_API_ID = f"{DOMAIN}.public_read_model"
+LLM_API_NAME = "Grocery Intel"
+
+
 class GroceryIntelDescribeSchemaTool(llm.Tool):
     """Describe the Grocery Intel public read model."""
 
@@ -71,7 +75,7 @@ class GroceryIntelDescribeSchemaTool(llm.Tool):
         self,
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
-        llm_context: LLMContext,
+        llm_context: llm.LLMContext,
     ) -> dict[str, Any]:
         """Return the schema descriptor."""
         scope = normalize_scope(tool_input.tool_args.get("scope"))
@@ -104,7 +108,7 @@ class GroceryIntelQueryTool(llm.Tool):
         self,
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
-        llm_context: LLMContext,
+        llm_context: llm.LLMContext,
     ) -> dict[str, Any]:
         """Return matching rows from a public dataset."""
         args = tool_input.tool_args
@@ -152,7 +156,7 @@ class GroceryIntelAggregateTool(llm.Tool):
         self,
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
-        llm_context: LLMContext,
+        llm_context: llm.LLMContext,
     ) -> dict[str, Any]:
         """Return grouped analytics from a public dataset."""
         args = tool_input.tool_args
@@ -194,7 +198,7 @@ class GroceryIntelExportReadModelTool(llm.Tool):
         self,
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
-        llm_context: LLMContext,
+        llm_context: llm.LLMContext,
     ) -> dict[str, Any]:
         """Return capped read-model datasets."""
         args = tool_input.tool_args
@@ -227,10 +231,44 @@ def _coerce_string_set(value: Any) -> set[str]:
     return set()
 
 
+class GroceryIntelReadModelAPI(llm.API):
+    """Grocery Intel read-only public data API for LLM/MCP consumers."""
+
+    async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
+        """Return the Grocery Intel public read-model API instance."""
+        return llm.APIInstance(
+            api=self,
+            api_prompt=PROMPT,
+            llm_context=llm_context,
+            tools=[
+                GroceryIntelDescribeSchemaTool(),
+                GroceryIntelQueryTool(),
+                GroceryIntelAggregateTool(),
+                GroceryIntelExportReadModelTool(),
+            ],
+        )
+
+
 @callback
-def async_get_tools(hass: HomeAssistant, llm_context: LLMContext) -> llm.LLMTools:
-    """Return Grocery Intel tools to expose to Home Assistant LLM APIs."""
-    return llm.LLMTools(
+def async_register_llm_api(hass: HomeAssistant) -> Callable[[], None] | None:
+    """Register the Grocery Intel LLM API if it is not already registered."""
+    if any(api.id == LLM_API_ID for api in llm.async_get_apis(hass)):
+        return None
+    return llm.async_register_api(
+        hass,
+        GroceryIntelReadModelAPI(hass=hass, id=LLM_API_ID, name=LLM_API_NAME),
+    )
+
+
+@callback
+def async_get_tools(hass: HomeAssistant, llm_context: llm.LLMContext) -> Any:
+    """Return Grocery Intel tools for LLM APIs that support contributed tools."""
+    try:
+        from homeassistant.components import llm as component_llm
+    except ImportError:
+        return None
+
+    return component_llm.LLMTools(
         tools=[
             GroceryIntelDescribeSchemaTool(),
             GroceryIntelQueryTool(),
