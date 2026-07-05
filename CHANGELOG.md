@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 (2026-07-05)
+
+- LLM/MCP: added a read-only public read model for Grocery Intel data, exposed through Home Assistant's LLM tool surface for use by Home Assistant MCP clients.
+- New generic tools: `GroceryIntelDescribeSchema`, `GroceryIntelQuery`, `GroceryIntelAggregate`, and `GroceryIntelExportReadModel`.
+- Public schema includes privacy scopes, documented datasets, query filters, pagination, related-record inclusion, generic aggregation, and capped read-model exports.
+- Docs: documented the public read model, MCP access path, privacy scopes, and example query/aggregate shapes.
+- Agent handoff: added guardrails for keeping LLM/MCP access generic, read-only, and privacy-filtered by default.
+
 ## 1.3.0 (2026-05-23)
 
 - Services: added `grocery_intel.delete_receipt` to remove a receipt by `receipt_id` directly.

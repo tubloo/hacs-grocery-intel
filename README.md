@@ -48,6 +48,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
   - Optional configurable marker for auto-added item names (prefix/suffix), for example `[Auto] Eggs` or `Eggs [Auto]`.
   - Optional translation of canonical item names to Home Assistant language (confidence-threshold based, with per-product cache).
 - Inventory images (fridge/pantry/cupboard) inbox + vision analysis (optional)
+- Read-only public data model for Home Assistant LLM/MCP consumers
 - Alcohol item normalization (Beer/Wine/Cider/Spirits)
 
 ## What you can analyze
@@ -58,6 +59,7 @@ Grocery Intel is a local-first Home Assistant integration that turns grocery rec
 - Purchase cadence: how frequently items appear across receipts (useful for shopping list suggestions)
 - Inventory freshness: items “recently seen” via pantry/fridge images (boost-only evidence; no exact counts)
 - Pipeline health: receipt processing status counts and timing breakdowns (overall/by method/provider)
+- Open-ended external analysis through read-only LLM/MCP tools (for example custom store, product, price, and spend comparisons)
 
 ## Data model (high level)
 Grocery Intel stores its richer data in Home Assistant storage (`/config/.storage/grocery_intel.data`). Sensors are summaries over that data.
@@ -73,6 +75,64 @@ Grocery Intel stores its richer data in Home Assistant storage (`/config/.storag
 - Inventory images: inbox-imported pantry/fridge/cupboard photos with `taken_at` (EXIF, when available), analysis status, and detected items
 - Processed file indexes: fingerprints/hashes used to avoid importing the same file twice
 - Activity log: auditable history of automatic/manual actions (imports, duplicates, extraction done/failed, auto-shopping runs, image analysis) with undo where possible
+
+### Public read model for LLM/MCP consumers
+Grocery Intel exposes a read-only public read model through Home Assistant's LLM API. When Home Assistant's official MCP Server integration is enabled, MCP clients can access these tools through Home Assistant's `/api/mcp` endpoint using Home Assistant authentication.
+
+The public model is versioned separately from internal storage and is designed for open-ended consumers such as LLM agents, notebooks, local scripts, dashboards, and BI tools.
+
+- `GroceryIntelDescribeSchema`: returns datasets, fields, relationships, filter operators, aggregation options, and privacy scopes.
+- `GroceryIntelQuery`: reads rows from a dataset with filters, sorting, pagination, field selection, and optional related-record inclusion.
+- `GroceryIntelAggregate`: performs generic group-by analytics with metrics such as `count`, `sum`, `avg`, `min`, and `max`, plus optional day/week/month/year buckets.
+- `GroceryIntelExportReadModel`: returns a capped read-only export of public datasets for broad context.
+
+Datasets available in the public model:
+- `receipts`
+- `line_items`
+- `products`
+- `observations`
+- `stores`
+- `inventory_images`
+- `activities` only with `scope: full`
+
+Privacy scopes:
+- `analytics` (default): removes raw receipt text, OCR text, local file paths, provider/model metadata, extraction timing details, content hashes, inventory raw model output, and fingerprints.
+- `debug`: includes more extraction metadata but still removes raw receipt text, OCR text, local file paths, and fingerprints.
+- `full`: includes the activity log and richer rows, but still excludes local file paths.
+
+Example query shapes:
+
+```json
+{
+  "dataset": "receipts",
+  "filters": [{"field": "purchased_at", "op": "gte", "value": "2026-01-01"}],
+  "sort": [{"field": "purchased_at", "direction": "desc"}],
+  "limit": 50
+}
+```
+
+```json
+{
+  "dataset": "observations",
+  "group_by": ["product_id", "store_name"],
+  "metrics": [
+    {"op": "avg", "field": "unit_price", "name": "avg_unit_price"},
+    {"op": "count", "name": "sample_count"}
+  ],
+  "filters": [{"field": "confidence", "op": "gte", "value": 75}]
+}
+```
+
+```json
+{
+  "dataset": "receipts",
+  "time_bucket": {"field": "purchased_at", "bucket": "month", "name": "month"},
+  "group_by": ["store_name"],
+  "metrics": [{"op": "sum", "field": "total", "name": "spend"}]
+}
+```
+
+This surface is read-only. It does not create, update, delete, reparse, or mutate shopping-list state.
 
 ## Entities
 - `sensor.grocery_intel_spend_week`

@@ -66,6 +66,11 @@ Guidelines:
 
 - Rich data stored in HA storage; sensors are summaries.
 - Spend analytics now include dynamic period sensors for categories and subcategories (`spend_by_category_periods`, `spend_by_subcategory_periods`) driven by persisted receipt categories/subcategories using week/month/year and 12-month buckets.
+- Read-only LLM/MCP access is exposed through a versioned public read model (`custom_components/grocery_intel/read_model.py`) and Home Assistant LLM tools (`custom_components/grocery_intel/llm.py`).
+  - Keep this generic and consumer-oriented: schema description, query, aggregate, and capped export.
+  - Do not expose direct `.storage` internals to agents.
+  - Default scope is `analytics`; raw receipt text, OCR text, local file paths, provider metadata, raw inventory model output, and fingerprints must stay out of default agent responses.
+  - Keep all LLM/MCP tools read-only unless a future request explicitly asks for write actions with confirmation/activity logging.
 - Automatic actions create an activity record; undo exists for supported actions and must be safe.
 
 ### Automated shopping list (v1)
