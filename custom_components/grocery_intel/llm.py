@@ -115,12 +115,12 @@ class GroceryIntelQueryTool(llm.Tool):
         {
             vol.Required("dataset"): str,
             vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
-            vol.Optional("filters"): object,
-            vol.Optional("sort"): object,
+            vol.Optional("filters"): vol.Any(dict, list),
+            vol.Optional("sort"): vol.Any(dict, list, str),
             vol.Optional("limit", default=DEFAULT_QUERY_LIMIT): vol.Coerce(int),
             vol.Optional("offset", default=0): vol.Coerce(int),
-            vol.Optional("fields"): object,
-            vol.Optional("include"): object,
+            vol.Optional("fields"): vol.Any(list, str),
+            vol.Optional("include"): vol.Any(list, str),
         }
     )
 
@@ -165,11 +165,11 @@ class GroceryIntelAggregateTool(llm.Tool):
         {
             vol.Required("dataset"): str,
             vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
-            vol.Optional("filters"): object,
-            vol.Optional("group_by"): object,
-            vol.Optional("metrics"): object,
-            vol.Optional("time_bucket"): object,
-            vol.Optional("sort"): object,
+            vol.Optional("filters"): vol.Any(dict, list),
+            vol.Optional("group_by"): vol.Any(list, str),
+            vol.Optional("metrics"): vol.Any(dict, list, str),
+            vol.Optional("time_bucket"): dict,
+            vol.Optional("sort"): vol.Any(dict, list, str),
             vol.Optional("limit", default=DEFAULT_QUERY_LIMIT): vol.Coerce(int),
         }
     )
@@ -213,7 +213,7 @@ class GroceryIntelExportReadModelTool(llm.Tool):
     parameters = vol.Schema(
         {
             vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
-            vol.Optional("datasets"): object,
+            vol.Optional("datasets"): vol.Any(list, str),
             vol.Optional("limit_per_dataset", default=DEFAULT_QUERY_LIMIT): vol.Coerce(int),
         }
     )

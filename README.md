@@ -112,6 +112,7 @@ Example query shapes:
 
 Parameter formats:
 - `filters`: use `[{ "field": "purchased_at", "op": "gte", "value": "2026-01-01" }]`. Multiple filters are ANDed together.
+- `filters`, `sort`, `group_by`, `metrics`, `fields`, `include`, and `datasets` accept JSON arrays where shown in the examples; MCP clients should not stringify these nested values inside the Grocery Intel arguments object.
 - Date values: use ISO strings. Prefer `YYYY-MM-DD` for dates or timezone-aware ISO datetimes such as `2026-07-01T00:00:00+02:00`.
 - Date ranges: prefer half-open ranges with `gte` start and `lt` next period, for example `2026-01-01 <= purchased_at < 2026-02-01`.
 - `sort`: use `[{ "field": "purchased_at", "direction": "desc" }]` with `asc` or `desc`.

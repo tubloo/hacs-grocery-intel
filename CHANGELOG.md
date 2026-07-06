@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.4 (2026-07-06)
+
+- MCP/LLM: corrected Grocery Intel tool parameter schemas so MCP clients can pass list-shaped values for `filters`, `sort`, `fields`, `include`, `group_by`, `metrics`, and `datasets` without client-side validation failures.
+- MCP/LLM: fixed Dify-style analytics calls where valid metrics arrays were rejected before reaching Grocery Intel.
+
 ## 1.4.3 (2026-07-06)
 
 - MCP/LLM: expanded `DescribeGroceryIntelDataModel` with a machine-readable parameter contract covering filter shape, ISO date/datetime formats, half-open date ranges, sort, fields, include, group-by, metrics, and time-bucket examples.
