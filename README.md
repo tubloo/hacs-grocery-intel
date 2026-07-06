@@ -87,10 +87,12 @@ To expose Grocery Intel through Home Assistant MCP:
 - In the LLM API selector, include **Grocery Intel**. Select **Assist** too if you also want the standard Home Assistant control tools.
 - Reconnect the MCP client so it refreshes the tool list.
 
-- `GroceryIntelDescribeSchema`: returns datasets, fields, relationships, filter operators, aggregation options, and privacy scopes.
-- `GroceryIntelQuery`: reads rows from a dataset with filters, sorting, pagination, field selection, and optional related-record inclusion.
-- `GroceryIntelAggregate`: performs generic group-by analytics with metrics such as `count`, `sum`, `avg`, `min`, and `max`, plus optional day/week/month/year buckets.
-- `GroceryIntelExportReadModel`: returns a capped read-only export of public datasets for broad context.
+- `DescribeGroceryIntelDataModel`: returns datasets, fields, relationships, filter operators, aggregation options, and privacy scopes.
+- `SearchGroceryIntelData`: reads rows from a dataset with filters, sorting, pagination, field selection, and optional related-record inclusion.
+- `CalculateGroceryIntelAnalytics`: performs generic group-by analytics with metrics such as `count`, `sum`, `avg`, `min`, and `max`, plus optional day/week/month/year buckets.
+- `ExportGroceryIntelDataSnapshot`: returns a capped read-only export of public datasets for broad context.
+
+The Grocery Intel LLM API prompt follows the requested response language when the client provides one, otherwise it follows the user's conversation language. Home Assistant's configured language is treated as locale context only, not as a hard requirement for answer language. Tool names, dataset names, field names, JSON keys, store names, product names, and raw data values remain unchanged.
 
 Datasets available in the public model:
 - `receipts`

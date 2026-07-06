@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2 (2026-07-06)
+
+- MCP/LLM: renamed the Grocery Intel tool IDs to more descriptive names: `DescribeGroceryIntelDataModel`, `SearchGroceryIntelData`, `CalculateGroceryIntelAnalytics`, and `ExportGroceryIntelDataSnapshot`.
+- MCP/LLM: expanded tool descriptions so agents can choose between schema inspection, row search, grouped analytics, and capped snapshots more reliably.
+- MCP/LLM: made the Grocery Intel API prompt language-aware using the client-requested or conversation language for user-facing answers, while treating Home Assistant language as locale context only and preserving dataset names, field names, JSON keys, and raw data values.
+- Docs: updated the public read model section for the new descriptive tool IDs and language behavior.
+
 ## 1.4.1 (2026-07-05)
 
 - MCP/LLM: register Grocery Intel as a selectable Home Assistant LLM API named `Grocery Intel`, so Home Assistant MCP Server can expose the read-only Grocery Intel tools when that API is selected.

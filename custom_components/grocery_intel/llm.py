@@ -24,14 +24,29 @@ from .read_model import (
 )
 
 
-PROMPT = (
-    "Grocery Intel exposes a read-only, versioned public data model for household "
-    "receipt, grocery, dining, product, store, price, and inventory analysis. "
-    "Use GroceryIntelDescribeSchema before unfamiliar queries. Prefer "
-    "GroceryIntelQuery for row-level lookup and GroceryIntelAggregate for grouped "
-    "analytics. Treat results as evidence-limited: mention sample sizes, matched "
-    "rows, and data coverage when making comparisons."
-)
+def _api_prompt(hass: HomeAssistant, llm_context: llm.LLMContext | None = None) -> str:
+    """Build language-aware instructions for Grocery Intel tools."""
+    requested_language = (llm_context.language if llm_context else None) or ""
+    ha_language = getattr(hass.config, "language", None) or ""
+    return (
+        "Grocery Intel exposes a read-only, versioned public data model for household "
+        "receipt, grocery, dining, product, store, price, and inventory analysis. "
+        "Use DescribeGroceryIntelDataModel before unfamiliar queries. Prefer "
+        "CalculateGroceryIntelAnalytics for totals, comparisons, date buckets, "
+        "price trends, and grouped summaries. Prefer SearchGroceryIntelData for "
+        "row-level lookup, recent receipts, specific products, or source details. "
+        "Use ExportGroceryIntelDataSnapshot only when targeted query or aggregate "
+        "calls are insufficient. Treat results as evidence-limited: mention date "
+        "ranges, filters, sample sizes, matched rows, and data coverage when making "
+        "comparisons. "
+        f"Requested response language is '{requested_language or 'not specified'}'. "
+        f"Home Assistant language is '{ha_language or 'not specified'}'. Use the "
+        "requested response language when provided; otherwise follow the user's "
+        "conversation language. Treat Home Assistant language as locale context only, "
+        "not as a hard requirement for answer language. Keep tool names, dataset "
+        "names, field names, JSON keys, store names, product names, and raw data "
+        "values unchanged."
+    )
 
 
 def _scope_schema() -> Any:
@@ -60,10 +75,12 @@ LLM_API_NAME = "Grocery Intel"
 class GroceryIntelDescribeSchemaTool(llm.Tool):
     """Describe the Grocery Intel public read model."""
 
-    name = "GroceryIntelDescribeSchema"
+    name = "DescribeGroceryIntelDataModel"
     description = (
-        "Describe the read-only Grocery Intel public schema, datasets, fields, "
-        "relationships, filters, aggregation options, and privacy scopes."
+        "Describe the Grocery Intel read-only data model and query options. "
+        "Use this first when you need dataset names, field names, relationships, "
+        "filter operators, aggregation metrics, time bucket options, or privacy "
+        "scopes before searching or calculating grocery analytics."
     )
     parameters = vol.Schema(
         {
@@ -85,11 +102,14 @@ class GroceryIntelDescribeSchemaTool(llm.Tool):
 class GroceryIntelQueryTool(llm.Tool):
     """Query the Grocery Intel public read model."""
 
-    name = "GroceryIntelQuery"
+    name = "SearchGroceryIntelData"
     description = (
-        "Query rows from a Grocery Intel dataset. Supports filters, sorting, "
-        "pagination, field selection, and related record inclusion. This is "
-        "read-only and uses the public privacy-filtered data model."
+        "Search Grocery Intel receipts, receipt line items, products, purchase "
+        "observations, stores, inventory images, and full-scope activities. "
+        "Use this for row-level questions such as recent receipts, receipts from "
+        "a date range or store, specific product history, source rows supporting "
+        "an answer, or selected fields from a dataset. Supports filters, sorting, "
+        "pagination, field selection, and related record inclusion."
     )
     parameters = vol.Schema(
         {
@@ -132,12 +152,14 @@ class GroceryIntelQueryTool(llm.Tool):
 class GroceryIntelAggregateTool(llm.Tool):
     """Aggregate the Grocery Intel public read model."""
 
-    name = "GroceryIntelAggregate"
+    name = "CalculateGroceryIntelAnalytics"
     description = (
-        "Aggregate a Grocery Intel dataset with filters, group-by fields, "
-        "metrics, optional time buckets, sorting, and row limits. Use this for "
-        "open-ended analytics such as spend by store, product price movement, "
-        "or month-over-month trends."
+        "Calculate Grocery Intel analytics from receipts, products, stores, and "
+        "purchase observations. Use this for spend totals, spend by store, "
+        "category summaries, week/month/year trends, product price comparisons, "
+        "cheapest-store analysis, and price changes over time. Supports filters, "
+        "group-by fields, count/sum/avg/min/max metrics, day/week/month/year time "
+        "buckets, sorting, and row limits."
     )
     parameters = vol.Schema(
         {
@@ -180,11 +202,13 @@ class GroceryIntelAggregateTool(llm.Tool):
 class GroceryIntelExportReadModelTool(llm.Tool):
     """Return a capped public read-model export."""
 
-    name = "GroceryIntelExportReadModel"
+    name = "ExportGroceryIntelDataSnapshot"
     description = (
-        "Return a capped read-only export of the Grocery Intel public read "
-        "model. Use for consumers that need broad local context, but prefer "
-        "GroceryIntelQuery or GroceryIntelAggregate for targeted analysis."
+        "Export a capped read-only Grocery Intel data snapshot. Use this only "
+        "when targeted search or analytics calls are not enough and broad local "
+        "context is needed. The default analytics scope excludes raw receipt text, "
+        "OCR text, local file paths, provider metadata, raw inventory model output, "
+        "and fingerprints."
     )
     parameters = vol.Schema(
         {
@@ -238,7 +262,7 @@ class GroceryIntelReadModelAPI(llm.API):
         """Return the Grocery Intel public read-model API instance."""
         return llm.APIInstance(
             api=self,
-            api_prompt=PROMPT,
+            api_prompt=_api_prompt(self.hass, llm_context),
             llm_context=llm_context,
             tools=[
                 GroceryIntelDescribeSchemaTool(),
@@ -275,5 +299,5 @@ def async_get_tools(hass: HomeAssistant, llm_context: llm.LLMContext) -> Any:
             GroceryIntelAggregateTool(),
             GroceryIntelExportReadModelTool(),
         ],
-        prompt=PROMPT,
+        prompt=_api_prompt(hass, llm_context),
     )
