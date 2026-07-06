@@ -72,6 +72,7 @@ Guidelines:
 - Tool IDs should be descriptive for external agents; prompts should follow the client-requested or conversation language for user-facing text, treat Home Assistant language as locale context only, and preserve dataset names, field names, JSON keys, and raw values.
 - `DescribeGroceryIntelDataModel` should expose machine-readable parameter formats for filters, ISO date/datetime values, sorting, grouping, metrics, and time buckets so external agents do not have to infer call shapes.
 - MCP tool parameter schemas should match the actual accepted JSON shapes; list-shaped parameters such as `filters`, `metrics`, and `group_by` must not be declared as object-only.
+- Prefer scalar, purpose-built MCP tools for high-frequency agent workflows. Keep generic query/aggregate tools available for open-ended consumers, but route common spend/recent receipt/product price/data-quality questions through simpler schemas where practical.
   - Do not expose direct `.storage` internals to agents.
   - Default scope is `analytics`; raw receipt text, OCR text, local file paths, provider metadata, raw inventory model output, and fingerprints must stay out of default agent responses.
   - Keep all LLM/MCP tools read-only unless a future request explicitly asks for write actions with confirmation/activity logging.

@@ -18,7 +18,12 @@ from .read_model import (
     SCOPES,
     aggregate_public_read_model,
     async_build_public_read_model,
+    calculate_grocery_spend_summary,
     describe_public_schema,
+    find_product_price_history,
+    get_grocery_spend_breakdown,
+    inspect_grocery_data_quality,
+    list_recent_grocery_receipts,
     normalize_scope,
     query_public_read_model,
 )
@@ -32,9 +37,12 @@ def _api_prompt(hass: HomeAssistant, llm_context: llm.LLMContext | None = None) 
         "Grocery Intel exposes a read-only, versioned public data model for household "
         "receipt, grocery, dining, product, store, price, and inventory analysis. "
         "Use DescribeGroceryIntelDataModel before unfamiliar queries. Prefer "
-        "CalculateGroceryIntelAnalytics for totals, comparisons, date buckets, "
-        "price trends, and grouped summaries. Prefer SearchGroceryIntelData for "
-        "row-level lookup, recent receipts, specific products, or source details. "
+        "CalculateGrocerySpendSummary for simple spend totals, "
+        "ListRecentGroceryReceipts for latest purchases, GetGrocerySpendBreakdown "
+        "for store/category/month summaries, and FindProductPriceHistory for "
+        "product price questions. Prefer CalculateGroceryIntelAnalytics only for "
+        "advanced custom aggregations. Prefer SearchGroceryIntelData for row-level "
+        "lookup, specific products, or source details. "
         "Use ExportGroceryIntelDataSnapshot only when targeted query or aggregate "
         "calls are insufficient. Treat results as evidence-limited: mention date "
         "ranges, filters, sample sizes, matched rows, and data coverage when making "
@@ -199,6 +207,217 @@ class GroceryIntelAggregateTool(llm.Tool):
             raise HomeAssistantError(str(err)) from err
 
 
+class GroceryIntelSpendSummaryTool(llm.Tool):
+    """Calculate common grocery spend summaries with scalar parameters."""
+
+    name = "CalculateGrocerySpendSummary"
+    description = (
+        "Calculate total grocery spend and receipt count for a date range using "
+        "simple scalar parameters. Prefer this for questions like this week, this "
+        "month, last month, this year, spend at a store, or spend by category."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
+            vol.Optional("start_date"): str,
+            vol.Optional("end_date"): str,
+            vol.Optional("date_field", default="purchased_at"): vol.In(["purchased_at", "created_at"]),
+            vol.Optional("store_name"): str,
+            vol.Optional("category"): str,
+            vol.Optional("subcategory"): str,
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> dict[str, Any]:
+        """Return a spend summary."""
+        args = tool_input.tool_args
+        scope = normalize_scope(args.get("scope"))
+        read_model = await _async_read_model(hass, scope)
+        return calculate_grocery_spend_summary(
+            read_model,
+            start_date=args.get("start_date"),
+            end_date=args.get("end_date"),
+            date_field=str(args.get("date_field") or "purchased_at"),
+            store_name=args.get("store_name"),
+            category=args.get("category"),
+            subcategory=args.get("subcategory"),
+        )
+
+
+class GroceryIntelRecentReceiptsTool(llm.Tool):
+    """List recent grocery receipts with scalar parameters."""
+
+    name = "ListRecentGroceryReceipts"
+    description = (
+        "List recent or previous grocery receipts using simple scalar parameters. "
+        "Use this for last spend, spend before a known receipt, recent purchases, "
+        "or checking date coverage."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
+            vol.Optional("limit", default=10): vol.Coerce(int),
+            vol.Optional("start_date"): str,
+            vol.Optional("end_date"): str,
+            vol.Optional("before_date"): str,
+            vol.Optional("date_field", default="purchased_at"): vol.In(["purchased_at", "created_at"]),
+            vol.Optional("store_name"): str,
+            vol.Optional("category"): str,
+            vol.Optional("include_missing_dates", default=False): bool,
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> dict[str, Any]:
+        """Return recent receipts."""
+        args = tool_input.tool_args
+        scope = normalize_scope(args.get("scope"))
+        read_model = await _async_read_model(hass, scope)
+        return list_recent_grocery_receipts(
+            read_model,
+            limit=args.get("limit", 10),
+            start_date=args.get("start_date"),
+            end_date=args.get("end_date"),
+            before_date=args.get("before_date"),
+            date_field=str(args.get("date_field") or "purchased_at"),
+            store_name=args.get("store_name"),
+            category=args.get("category"),
+            include_missing_dates=bool(args.get("include_missing_dates", False)),
+        )
+
+
+class GroceryIntelSpendBreakdownTool(llm.Tool):
+    """Calculate grocery spend breakdowns with scalar grouping."""
+
+    name = "GetGrocerySpendBreakdown"
+    description = (
+        "Calculate spend grouped by one common dimension using scalar parameters. "
+        "Use this for spend by store, category, subcategory, week, month, or year."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
+            vol.Optional("start_date"): str,
+            vol.Optional("end_date"): str,
+            vol.Optional("date_field", default="purchased_at"): vol.In(["purchased_at", "created_at"]),
+            vol.Optional("group_by", default="store"): vol.In(
+                ["store", "category", "subcategory", "week", "month", "year"]
+            ),
+            vol.Optional("store_name"): str,
+            vol.Optional("category"): str,
+            vol.Optional("limit", default=100): vol.Coerce(int),
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> dict[str, Any]:
+        """Return a spend breakdown."""
+        args = tool_input.tool_args
+        scope = normalize_scope(args.get("scope"))
+        read_model = await _async_read_model(hass, scope)
+        return get_grocery_spend_breakdown(
+            read_model,
+            start_date=args.get("start_date"),
+            end_date=args.get("end_date"),
+            date_field=str(args.get("date_field") or "purchased_at"),
+            group_by=str(args.get("group_by") or "store"),
+            store_name=args.get("store_name"),
+            category=args.get("category"),
+            limit=args.get("limit", 100),
+        )
+
+
+class GroceryIntelProductPriceHistoryTool(llm.Tool):
+    """Find product price history with scalar parameters."""
+
+    name = "FindProductPriceHistory"
+    description = (
+        "Find product purchase observations and price history for a product query. "
+        "Use this for latest price, price trend, price increases, and store-specific "
+        "product history."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required("product_query"): str,
+            vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
+            vol.Optional("start_date"): str,
+            vol.Optional("end_date"): str,
+            vol.Optional("store_name"): str,
+            vol.Optional("limit", default=10): vol.Coerce(int),
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> dict[str, Any]:
+        """Return product price observations."""
+        args = tool_input.tool_args
+        scope = normalize_scope(args.get("scope"))
+        read_model = await _async_read_model(hass, scope)
+        return find_product_price_history(
+            read_model,
+            product_query=str(args.get("product_query") or ""),
+            start_date=args.get("start_date"),
+            end_date=args.get("end_date"),
+            store_name=args.get("store_name"),
+            limit=args.get("limit", 10),
+        )
+
+
+class GroceryIntelDataQualityTool(llm.Tool):
+    """Inspect common Grocery Intel data quality issues."""
+
+    name = "InspectGroceryDataQuality"
+    description = (
+        "Inspect common read-model data quality issues such as missing receipt "
+        "dates, missing totals, failed extraction, uncategorized receipts, and "
+        "low-confidence product matches."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional("scope", default=ANALYTICS_SCOPE): _scope_schema(),
+            vol.Optional("dataset", default="receipts"): vol.In(["receipts", "line_items", "observations"]),
+            vol.Optional("issue_type", default="missing_dates"): vol.In(
+                ["missing_dates", "missing_totals", "failed_extraction", "uncategorized", "low_confidence"]
+            ),
+            vol.Optional("limit", default=10): vol.Coerce(int),
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> dict[str, Any]:
+        """Return data quality issues."""
+        args = tool_input.tool_args
+        scope = normalize_scope(args.get("scope"))
+        read_model = await _async_read_model(hass, scope)
+        return inspect_grocery_data_quality(
+            read_model,
+            dataset=str(args.get("dataset") or "receipts"),
+            issue_type=str(args.get("issue_type") or "missing_dates"),
+            limit=args.get("limit", 10),
+        )
+
+
 class GroceryIntelExportReadModelTool(llm.Tool):
     """Return a capped public read-model export."""
 
@@ -266,6 +485,11 @@ class GroceryIntelReadModelAPI(llm.API):
             llm_context=llm_context,
             tools=[
                 GroceryIntelDescribeSchemaTool(),
+                GroceryIntelSpendSummaryTool(),
+                GroceryIntelRecentReceiptsTool(),
+                GroceryIntelSpendBreakdownTool(),
+                GroceryIntelProductPriceHistoryTool(),
+                GroceryIntelDataQualityTool(),
                 GroceryIntelQueryTool(),
                 GroceryIntelAggregateTool(),
                 GroceryIntelExportReadModelTool(),
@@ -295,6 +519,11 @@ def async_get_tools(hass: HomeAssistant, llm_context: llm.LLMContext) -> Any:
     return component_llm.LLMTools(
         tools=[
             GroceryIntelDescribeSchemaTool(),
+            GroceryIntelSpendSummaryTool(),
+            GroceryIntelRecentReceiptsTool(),
+            GroceryIntelSpendBreakdownTool(),
+            GroceryIntelProductPriceHistoryTool(),
+            GroceryIntelDataQualityTool(),
             GroceryIntelQueryTool(),
             GroceryIntelAggregateTool(),
             GroceryIntelExportReadModelTool(),

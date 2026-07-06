@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.5 (2026-07-06)
+
+- MCP/LLM: added scalar, purpose-built read-only tools for common agent workflows: `CalculateGrocerySpendSummary`, `ListRecentGroceryReceipts`, `GetGrocerySpendBreakdown`, `FindProductPriceHistory`, and `InspectGroceryDataQuality`.
+- MCP/LLM: updated the Grocery Intel prompt to prefer the new scalar tools for spend totals, recent receipts, grouped spend, product price history, and data-quality checks before falling back to generic search/aggregate tools.
+- Docs: documented the new reliable common-query tools alongside the generic read-model tools.
+
 ## 1.4.4 (2026-07-06)
 
 - MCP/LLM: corrected Grocery Intel tool parameter schemas so MCP clients can pass list-shaped values for `filters`, `sort`, `fields`, `include`, `group_by`, `metrics`, and `datasets` without client-side validation failures.

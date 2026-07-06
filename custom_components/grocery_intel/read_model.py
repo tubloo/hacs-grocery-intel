@@ -13,6 +13,8 @@ PUBLIC_SCHEMA_VERSION = 1
 DEFAULT_QUERY_LIMIT = 100
 MAX_QUERY_LIMIT = 500
 MAX_AGGREGATE_GROUPS = 500
+DEFAULT_RECENT_RECEIPT_LIMIT = 10
+MAX_RECENT_RECEIPT_LIMIT = 100
 
 ANALYTICS_SCOPE = "analytics"
 DEBUG_SCOPE = "debug"
@@ -457,6 +459,288 @@ def aggregate_public_read_model(
     }
 
 
+def calculate_grocery_spend_summary(
+    read_model: dict[str, Any],
+    *,
+    start_date: Any = None,
+    end_date: Any = None,
+    date_field: str = "purchased_at",
+    store_name: Any = None,
+    category: Any = None,
+    subcategory: Any = None,
+) -> dict[str, Any]:
+    """Return a scalar spend summary for common agent queries."""
+    date_field = _normalize_date_field(date_field, default="purchased_at")
+    rows = [dict(row) for row in (read_model.get("datasets") or {}).get("receipts") or []]
+    filtered = [
+        row
+        for row in rows
+        if _receipt_matches(
+            row,
+            start_date=start_date,
+            end_date=end_date,
+            date_field=date_field,
+            store_name=store_name,
+            category=category,
+            subcategory=subcategory,
+        )
+    ]
+    spend_values = [_safe_float(row.get("total")) for row in filtered]
+    spend_numbers = [value for value in spend_values if value is not None]
+    currencies = sorted({str(row.get("currency")) for row in filtered if row.get("currency")})
+    return {
+        "schema_version": read_model.get("schema_version", PUBLIC_SCHEMA_VERSION),
+        "scope": read_model.get("scope", ANALYTICS_SCOPE),
+        "dataset": "receipts",
+        "date_range": {"start": start_date or None, "end": end_date or None, "end_exclusive": True},
+        "date_field": date_field,
+        "filters": _scalar_filter_summary(
+            store_name=store_name,
+            category=category,
+            subcategory=subcategory,
+        ),
+        "source_rows": len(rows),
+        "matched_rows": len(filtered),
+        "receipt_count": len(filtered),
+        "receipts_with_total": len(spend_numbers),
+        "missing_total_count": len(filtered) - len(spend_numbers),
+        "total_spend": round(sum(spend_numbers), 2),
+        "currency_values": currencies,
+        "date_coverage": _date_coverage(rows, date_field),
+    }
+
+
+def list_recent_grocery_receipts(
+    read_model: dict[str, Any],
+    *,
+    limit: Any = DEFAULT_RECENT_RECEIPT_LIMIT,
+    start_date: Any = None,
+    end_date: Any = None,
+    before_date: Any = None,
+    date_field: str = "purchased_at",
+    store_name: Any = None,
+    category: Any = None,
+    include_missing_dates: bool = False,
+) -> dict[str, Any]:
+    """Return recent receipt rows using scalar arguments."""
+    date_field = _normalize_date_field(date_field, default="purchased_at")
+    rows = [dict(row) for row in (read_model.get("datasets") or {}).get("receipts") or []]
+    filtered = [
+        row
+        for row in rows
+        if _receipt_matches(
+            row,
+            start_date=start_date,
+            end_date=end_date,
+            before_date=before_date,
+            date_field=date_field,
+            store_name=store_name,
+            category=category,
+            include_missing_dates=include_missing_dates,
+        )
+    ]
+    sorted_rows = _sort_rows(filtered, [{"field": date_field, "direction": "desc"}])
+    limit_i = max(1, min(_coerce_int(limit, DEFAULT_RECENT_RECEIPT_LIMIT), MAX_RECENT_RECEIPT_LIMIT))
+    fields = ["id", "total", "purchased_at", "created_at", "store_name", "receipt_category", "currency", "filename"]
+    selected = [_select_fields(row, fields) for row in sorted_rows[:limit_i]]
+    return {
+        "schema_version": read_model.get("schema_version", PUBLIC_SCHEMA_VERSION),
+        "scope": read_model.get("scope", ANALYTICS_SCOPE),
+        "dataset": "receipts",
+        "date_range": {"start": start_date or None, "end": end_date or None, "end_exclusive": True},
+        "before_date": before_date or None,
+        "date_field": date_field,
+        "filters": _scalar_filter_summary(store_name=store_name, category=category),
+        "source_rows": len(rows),
+        "matched_rows": len(filtered),
+        "returned_rows": len(selected),
+        "limit": limit_i,
+        "rows": selected,
+        "date_coverage": _date_coverage(rows, date_field),
+    }
+
+
+def get_grocery_spend_breakdown(
+    read_model: dict[str, Any],
+    *,
+    start_date: Any = None,
+    end_date: Any = None,
+    date_field: str = "purchased_at",
+    group_by: str = "store",
+    store_name: Any = None,
+    category: Any = None,
+    limit: Any = DEFAULT_QUERY_LIMIT,
+) -> dict[str, Any]:
+    """Return spend grouped by one common scalar dimension."""
+    date_field = _normalize_date_field(date_field, default="purchased_at")
+    group_key = _normalize_group_by(group_by)
+    rows = [dict(row) for row in (read_model.get("datasets") or {}).get("receipts") or []]
+    filtered = [
+        row
+        for row in rows
+        if _receipt_matches(
+            row,
+            start_date=start_date,
+            end_date=end_date,
+            date_field=date_field,
+            store_name=store_name,
+            category=category,
+        )
+    ]
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in filtered:
+        for value in _breakdown_values(row, group_key, date_field):
+            grouped[value].append(row)
+
+    out: list[dict[str, Any]] = []
+    for value, group_rows in grouped.items():
+        numbers = [_safe_float(row.get("total")) for row in group_rows]
+        spend_numbers = [number for number in numbers if number is not None]
+        out.append(
+            {
+                "group": value,
+                "total_spend": round(sum(spend_numbers), 2),
+                "receipt_count": len(group_rows),
+                "receipts_with_total": len(spend_numbers),
+            }
+        )
+    sorted_rows = _sort_rows(out, [{"field": "total_spend", "direction": "desc"}])
+    limit_i = max(1, min(_coerce_int(limit, DEFAULT_QUERY_LIMIT), MAX_AGGREGATE_GROUPS))
+    return {
+        "schema_version": read_model.get("schema_version", PUBLIC_SCHEMA_VERSION),
+        "scope": read_model.get("scope", ANALYTICS_SCOPE),
+        "dataset": "receipts",
+        "date_range": {"start": start_date or None, "end": end_date or None, "end_exclusive": True},
+        "date_field": date_field,
+        "group_by": group_key,
+        "source_rows": len(rows),
+        "matched_rows": len(filtered),
+        "group_count": len(out),
+        "returned_groups": min(len(sorted_rows), limit_i),
+        "groups": sorted_rows[:limit_i],
+        "date_coverage": _date_coverage(rows, date_field),
+    }
+
+
+def find_product_price_history(
+    read_model: dict[str, Any],
+    *,
+    product_query: str,
+    start_date: Any = None,
+    end_date: Any = None,
+    store_name: Any = None,
+    limit: Any = DEFAULT_RECENT_RECEIPT_LIMIT,
+) -> dict[str, Any]:
+    """Return price observations matching a product query."""
+    query = str(product_query or "").strip()
+    datasets = read_model.get("datasets") or {}
+    observations = [dict(row) for row in datasets.get("observations") or []]
+    products = {row.get("product_id"): row for row in datasets.get("products") or []}
+    matched = [
+        row
+        for row in observations
+        if _observation_matches_product(row, products, query)
+        and _date_in_range(row.get("observed_at"), start_date=start_date, end_date=end_date)
+        and _string_contains(row.get("store_name"), store_name)
+    ]
+    sorted_rows = _sort_rows(matched, [{"field": "observed_at", "direction": "desc"}])
+    limit_i = max(1, min(_coerce_int(limit, DEFAULT_RECENT_RECEIPT_LIMIT), MAX_RECENT_RECEIPT_LIMIT))
+    prices = [_safe_float(row.get("unit_price")) for row in matched]
+    unit_prices = [value for value in prices if value is not None]
+    pack_prices = [_safe_float(row.get("pack_price")) for row in matched]
+    pack_price_numbers = [value for value in pack_prices if value is not None]
+    rows = []
+    for row in sorted_rows[:limit_i]:
+        product = products.get(row.get("product_id")) or {}
+        rows.append(
+            {
+                "observation_id": row.get("observation_id"),
+                "observed_at": row.get("observed_at"),
+                "product_id": row.get("product_id"),
+                "product_name": product.get("canonical_name"),
+                "store_name": row.get("store_name"),
+                "pack_price": row.get("pack_price"),
+                "unit_price": row.get("unit_price"),
+                "unit_type": row.get("unit_type"),
+                "confidence": row.get("confidence"),
+                "receipt_id": row.get("receipt_id"),
+            }
+        )
+    latest = rows[0] if rows else None
+    oldest = rows[-1] if rows else None
+    return {
+        "schema_version": read_model.get("schema_version", PUBLIC_SCHEMA_VERSION),
+        "scope": read_model.get("scope", ANALYTICS_SCOPE),
+        "dataset": "observations",
+        "product_query": query,
+        "date_range": {"start": start_date or None, "end": end_date or None, "end_exclusive": True},
+        "store_name": store_name or None,
+        "source_rows": len(observations),
+        "matched_rows": len(matched),
+        "returned_rows": len(rows),
+        "latest": latest,
+        "oldest_in_returned_rows": oldest,
+        "unit_price_summary": _number_summary(unit_prices),
+        "pack_price_summary": _number_summary(pack_price_numbers),
+        "rows": rows,
+    }
+
+
+def inspect_grocery_data_quality(
+    read_model: dict[str, Any],
+    *,
+    dataset: str = "receipts",
+    issue_type: str = "missing_dates",
+    limit: Any = DEFAULT_RECENT_RECEIPT_LIMIT,
+) -> dict[str, Any]:
+    """Return common read-model data quality issues."""
+    datasets = read_model.get("datasets") or {}
+    dataset = str(dataset or "receipts").strip()
+    rows = [dict(row) for row in datasets.get(dataset) or []]
+    issue = str(issue_type or "missing_dates").strip().lower()
+    limit_i = max(1, min(_coerce_int(limit, DEFAULT_RECENT_RECEIPT_LIMIT), MAX_RECENT_RECEIPT_LIMIT))
+
+    if dataset == "receipts" and issue == "missing_dates":
+        matched = [row for row in rows if not row.get("purchased_at")]
+        fields = ["id", "total", "purchased_at", "created_at", "store_name", "filename"]
+    elif dataset == "receipts" and issue == "missing_totals":
+        matched = [row for row in rows if _safe_float(row.get("total")) is None]
+        fields = ["id", "total", "purchased_at", "created_at", "store_name", "filename"]
+    elif dataset == "receipts" and issue == "failed_extraction":
+        matched = [row for row in rows if str(row.get("extract_status") or "").casefold() == "failed"]
+        fields = ["id", "extract_status", "purchased_at", "created_at", "store_name", "filename"]
+    elif dataset == "receipts" and issue == "uncategorized":
+        matched = [row for row in rows if not row.get("receipt_category")]
+        fields = ["id", "total", "purchased_at", "created_at", "store_name", "receipt_category", "filename"]
+    elif dataset == "line_items" and issue == "low_confidence":
+        matched = [row for row in rows if (_safe_float(row.get("match_confidence")) or 0) < 75]
+        fields = ["line_item_id", "receipt_id", "raw_name", "line_total", "matched_product_id", "match_confidence"]
+    elif dataset == "observations" and issue == "low_confidence":
+        matched = [row for row in rows if (_safe_float(row.get("confidence")) or 0) < 75]
+        fields = ["observation_id", "product_id", "store_name", "observed_at", "pack_price", "unit_price", "confidence"]
+    else:
+        matched = []
+        fields = []
+
+    selected = [_select_fields(row, fields) for row in matched[:limit_i]]
+    return {
+        "schema_version": read_model.get("schema_version", PUBLIC_SCHEMA_VERSION),
+        "scope": read_model.get("scope", ANALYTICS_SCOPE),
+        "dataset": dataset,
+        "issue_type": issue,
+        "supported_issue_types": {
+            "receipts": ["missing_dates", "missing_totals", "failed_extraction", "uncategorized"],
+            "line_items": ["low_confidence"],
+            "observations": ["low_confidence"],
+        },
+        "source_rows": len(rows),
+        "matched_rows": len(matched),
+        "returned_rows": len(selected),
+        "limit": limit_i,
+        "rows": selected,
+    }
+
+
 def _sanitize_rows(dataset: str, rows: list[dict[str, Any]], scope: str) -> list[dict[str, Any]]:
     strip_keys = SENSITIVE_KEYS_BY_SCOPE.get(scope, {}).get(dataset, set())
     return [{key: value for key, value in dict(row).items() if key not in strip_keys} for row in rows]
@@ -698,6 +982,129 @@ def _compute_metric(rows: list[dict[str, Any]], *, op: str, field: str | None) -
     if op == "max":
         return max(numbers)
     return None
+
+
+def _receipt_matches(
+    row: dict[str, Any],
+    *,
+    start_date: Any = None,
+    end_date: Any = None,
+    before_date: Any = None,
+    date_field: str = "purchased_at",
+    store_name: Any = None,
+    category: Any = None,
+    subcategory: Any = None,
+    include_missing_dates: bool = False,
+) -> bool:
+    if not include_missing_dates and not row.get(date_field):
+        return False
+    if not _date_in_range(
+        row.get(date_field),
+        start_date=start_date,
+        end_date=end_date,
+        before_date=before_date,
+        allow_missing=include_missing_dates,
+    ):
+        return False
+    if not _string_contains(row.get("store_name"), store_name):
+        return False
+    if category and not _compare_value(row.get("receipt_category"), "eq", category):
+        return False
+    if subcategory and not _compare_any(
+        _field_values(row, "receipt_subcategories.subcategory"), "eq", subcategory
+    ):
+        return False
+    return True
+
+
+def _date_in_range(
+    value: Any,
+    *,
+    start_date: Any = None,
+    end_date: Any = None,
+    before_date: Any = None,
+    allow_missing: bool = False,
+) -> bool:
+    if not value:
+        return allow_missing and not start_date and not end_date and not before_date
+    if start_date and not _compare_value(value, "gte", start_date):
+        return False
+    if end_date and not _compare_value(value, "lt", end_date):
+        return False
+    if before_date and not _compare_value(value, "lt", before_date):
+        return False
+    return True
+
+
+def _string_contains(value: Any, expected: Any) -> bool:
+    if expected is None or str(expected).strip() == "":
+        return True
+    if value is None:
+        return False
+    return str(expected).casefold() in str(value).casefold()
+
+
+def _normalize_date_field(value: Any, *, default: str) -> str:
+    field = str(value or default).strip()
+    return field if field in {"purchased_at", "created_at", "observed_at", "updated_at", "taken_at"} else default
+
+
+def _normalize_group_by(value: Any) -> str:
+    group_by = str(value or "store").strip().lower()
+    return group_by if group_by in {"store", "category", "subcategory", "week", "month", "year"} else "store"
+
+
+def _breakdown_values(row: dict[str, Any], group_by: str, date_field: str) -> list[str]:
+    if group_by == "store":
+        return [str(row.get("store_name") or "Unknown")]
+    if group_by == "category":
+        return [str(row.get("receipt_category") or "uncategorized")]
+    if group_by == "subcategory":
+        values = _field_values(row, "receipt_subcategories.subcategory")
+        return [str(value) for value in values if value] or ["uncategorized"]
+    if group_by in {"week", "month", "year"}:
+        return [_bucket_value(row.get(date_field), group_by) or "unknown"]
+    return ["unknown"]
+
+
+def _scalar_filter_summary(**values: Any) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None and str(value).strip()}
+
+
+def _date_coverage(rows: list[dict[str, Any]], date_field: str) -> dict[str, Any]:
+    populated = [row.get(date_field) for row in rows if row.get(date_field)]
+    return {
+        "field": date_field,
+        "rows": len(rows),
+        "populated": len(populated),
+        "missing": len(rows) - len(populated),
+    }
+
+
+def _observation_matches_product(
+    row: dict[str, Any], products: dict[Any, dict[str, Any]], query: str
+) -> bool:
+    if not query:
+        return False
+    product = products.get(row.get("product_id")) or {}
+    values = [
+        row.get("product_id"),
+        product.get("canonical_name"),
+        *list(product.get("aliases") or []),
+    ]
+    query_cf = query.casefold()
+    return any(value is not None and query_cf in str(value).casefold() for value in values)
+
+
+def _number_summary(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {"count": 0, "min": None, "max": None, "avg": None}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "max": max(values),
+        "avg": round(mean(values), 4),
+    }
 
 
 def _normalize_time_bucket(value: Any) -> dict[str, str] | None:

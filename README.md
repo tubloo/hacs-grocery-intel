@@ -88,6 +88,11 @@ To expose Grocery Intel through Home Assistant MCP:
 - Reconnect the MCP client so it refreshes the tool list.
 
 - `DescribeGroceryIntelDataModel`: returns datasets, fields, relationships, filter operators, aggregation options, and privacy scopes.
+- `CalculateGrocerySpendSummary`: returns total spend, receipt count, date coverage, and matched row counts from scalar inputs such as `start_date`, `end_date`, `store_name`, `category`, and `subcategory`.
+- `ListRecentGroceryReceipts`: returns recent or previous receipt rows with scalar filters such as `limit`, `before_date`, `store_name`, and `category`.
+- `GetGrocerySpendBreakdown`: returns spend grouped by one common dimension: `store`, `category`, `subcategory`, `week`, `month`, or `year`.
+- `FindProductPriceHistory`: returns matching product purchase observations, latest price, and price summaries for a `product_query`.
+- `InspectGroceryDataQuality`: returns common data-quality issues such as missing dates, missing totals, failed extraction, uncategorized receipts, and low-confidence matches.
 - `SearchGroceryIntelData`: reads rows from a dataset with filters, sorting, pagination, field selection, and optional related-record inclusion.
 - `CalculateGroceryIntelAnalytics`: performs generic group-by analytics with metrics such as `count`, `sum`, `avg`, `min`, and `max`, plus optional day/week/month/year buckets.
 - `ExportGroceryIntelDataSnapshot`: returns a capped read-only export of public datasets for broad context.
@@ -109,6 +114,17 @@ Privacy scopes:
 - `full`: includes the activity log and richer rows, but still excludes local file paths.
 
 Example query shapes:
+
+Reliable common-query tools use scalar parameters where possible:
+
+```json
+{
+  "start_date": "2026-07-01",
+  "end_date": "2026-08-01",
+  "date_field": "purchased_at",
+  "store_name": "ICA"
+}
+```
 
 Parameter formats:
 - `filters`: use `[{ "field": "purchased_at", "op": "gte", "value": "2026-01-01" }]`. Multiple filters are ANDed together.
