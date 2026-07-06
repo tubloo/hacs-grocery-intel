@@ -70,6 +70,7 @@ Guidelines:
   - Register the `Grocery Intel` Home Assistant LLM API during setup so MCP Server users can select it in the LLM API selector.
   - Keep this generic and consumer-oriented: schema description, query, aggregate, and capped export.
 - Tool IDs should be descriptive for external agents; prompts should follow the client-requested or conversation language for user-facing text, treat Home Assistant language as locale context only, and preserve dataset names, field names, JSON keys, and raw values.
+- `DescribeGroceryIntelDataModel` should expose machine-readable parameter formats for filters, ISO date/datetime values, sorting, grouping, metrics, and time buckets so external agents do not have to infer call shapes.
   - Do not expose direct `.storage` internals to agents.
   - Default scope is `analytics`; raw receipt text, OCR text, local file paths, provider metadata, raw inventory model output, and fingerprints must stay out of default agent responses.
   - Keep all LLM/MCP tools read-only unless a future request explicitly asks for write actions with confirmation/activity logging.

@@ -110,10 +110,21 @@ Privacy scopes:
 
 Example query shapes:
 
+Parameter formats:
+- `filters`: use `[{ "field": "purchased_at", "op": "gte", "value": "2026-01-01" }]`. Multiple filters are ANDed together.
+- Date values: use ISO strings. Prefer `YYYY-MM-DD` for dates or timezone-aware ISO datetimes such as `2026-07-01T00:00:00+02:00`.
+- Date ranges: prefer half-open ranges with `gte` start and `lt` next period, for example `2026-01-01 <= purchased_at < 2026-02-01`.
+- `sort`: use `[{ "field": "purchased_at", "direction": "desc" }]` with `asc` or `desc`.
+- `metrics`: use objects such as `{ "op": "sum", "field": "total", "name": "total_spend" }`; `count` does not require a field.
+- `time_bucket`: use `{ "field": "purchased_at", "bucket": "month", "name": "month" }`; buckets are `day`, `week`, `month`, and `year`.
+
 ```json
 {
   "dataset": "receipts",
-  "filters": [{"field": "purchased_at", "op": "gte", "value": "2026-01-01"}],
+  "filters": [
+    {"field": "purchased_at", "op": "gte", "value": "2026-01-01"},
+    {"field": "purchased_at", "op": "lt", "value": "2026-02-01"}
+  ],
   "sort": [{"field": "purchased_at", "direction": "desc"}],
   "limit": 50
 }

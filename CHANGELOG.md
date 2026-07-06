@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.3 (2026-07-06)
+
+- MCP/LLM: expanded `DescribeGroceryIntelDataModel` with a machine-readable parameter contract covering filter shape, ISO date/datetime formats, half-open date ranges, sort, fields, include, group-by, metrics, and time-bucket examples.
+- MCP/LLM: fixed date-only filter values such as `2026-01-01` when comparing against stored ISO datetime fields such as `purchased_at` and `observed_at`.
+- Docs: documented the MCP parameter format expected for dates, filters, sorting, grouping, metrics, and time buckets.
+
 ## 1.4.2 (2026-07-06)
 
 - MCP/LLM: renamed the Grocery Intel tool IDs to more descriptive names: `DescribeGroceryIntelDataModel`, `SearchGroceryIntelData`, `CalculateGroceryIntelAnalytics`, and `ExportGroceryIntelDataSnapshot`.

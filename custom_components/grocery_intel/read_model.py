@@ -238,6 +238,46 @@ def describe_public_schema(*, scope: str = ANALYTICS_SCOPE) -> dict[str, Any]:
         "available_scopes": sorted(SCOPES),
         "datasets": datasets,
         "query": {
+            "parameter_contract": {
+                "filters": {
+                    "shape": [
+                        {"field": "field_name", "op": "gte", "value": "2026-01-01"}
+                    ],
+                    "notes": [
+                        "Filters are ANDed together.",
+                        "A shorthand object is also accepted for equality filters, for example {'store_name': 'ICA'}.",
+                        "Nested/list fields can be addressed with dot paths, for example 'receipt_subcategories.subcategory'.",
+                    ],
+                    "date_values": {
+                        "preferred": "Use ISO 8601 date or datetime strings.",
+                        "date": "YYYY-MM-DD, for example 2026-01-31.",
+                        "datetime": "YYYY-MM-DDTHH:MM:SS or timezone-aware ISO datetime.",
+                        "range_recommendation": "Use half-open ranges with gte start and lt next period for precise day/month/year filtering.",
+                        "examples": [
+                            [
+                                {"field": "purchased_at", "op": "gte", "value": "2026-01-01"},
+                                {"field": "purchased_at", "op": "lt", "value": "2026-02-01"},
+                            ],
+                            [
+                                {"field": "observed_at", "op": "gte", "value": "2026-07-01T00:00:00+02:00"},
+                                {"field": "observed_at", "op": "lt", "value": "2026-08-01T00:00:00+02:00"},
+                            ],
+                        ],
+                    },
+                },
+                "sort": {
+                    "shape": [{"field": "field_name", "direction": "desc"}],
+                    "directions": ["asc", "desc"],
+                },
+                "fields": {
+                    "shape": ["field_name"],
+                    "description": "Optional list of fields to return from each row.",
+                },
+                "include": {
+                    "shape": ["receipt", "store", "product", "line_item"],
+                    "description": "Optional related records to include when relationships are available.",
+                },
+            },
             "filter_ops": [
                 "eq",
                 "ne",
@@ -258,6 +298,54 @@ def describe_public_schema(*, scope: str = ANALYTICS_SCOPE) -> dict[str, Any]:
             },
         },
         "aggregate": {
+            "parameter_contract": {
+                "group_by": {
+                    "shape": ["field_name"],
+                    "example": ["store_name"],
+                },
+                "metrics": {
+                    "shape": [{"op": "sum", "field": "total", "name": "total_spend"}],
+                    "notes": [
+                        "count does not require a field.",
+                        "sum, avg, min, and max should use numeric fields such as total, line_total, pack_price, or unit_price.",
+                    ],
+                },
+                "time_bucket": {
+                    "shape": {"field": "purchased_at", "bucket": "month", "name": "month"},
+                    "buckets": ["day", "week", "month", "year"],
+                    "output_formats": {
+                        "day": "YYYY-MM-DD",
+                        "week": "YYYY-Www ISO week, for example 2026-W03",
+                        "month": "YYYY-MM",
+                        "year": "YYYY",
+                    },
+                },
+                "examples": {
+                    "monthly_spend": {
+                        "dataset": "receipts",
+                        "filters": [
+                            {"field": "purchased_at", "op": "gte", "value": "2026-01-01"},
+                            {"field": "purchased_at", "op": "lt", "value": "2027-01-01"},
+                        ],
+                        "metrics": [{"op": "sum", "field": "total", "name": "total_spend"}],
+                        "time_bucket": {
+                            "field": "purchased_at",
+                            "bucket": "month",
+                            "name": "month",
+                        },
+                        "sort": [{"field": "month", "direction": "asc"}],
+                    },
+                    "spend_by_store": {
+                        "dataset": "receipts",
+                        "group_by": ["store_name"],
+                        "metrics": [
+                            {"op": "sum", "field": "total", "name": "total_spend"},
+                            {"op": "count", "name": "receipt_count"},
+                        ],
+                        "sort": [{"field": "total_spend", "direction": "desc"}],
+                    },
+                },
+            },
             "metrics": ["count", "sum", "avg", "min", "max"],
             "time_buckets": ["day", "week", "month", "year"],
             "max_groups": MAX_AGGREGATE_GROUPS,
@@ -458,6 +546,10 @@ def _coerce_comparable(left: Any, right: Any) -> tuple[Any, Any]:
     left_dt = _parse_datetime_like(left)
     right_dt = _parse_datetime_like(right)
     if left_dt is not None and right_dt is not None:
+        if isinstance(left_dt, datetime) and not isinstance(right_dt, datetime):
+            left_dt = left_dt.date()
+        elif isinstance(right_dt, datetime) and not isinstance(left_dt, datetime):
+            right_dt = right_dt.date()
         return left_dt, right_dt
     try:
         return float(left), float(right)
