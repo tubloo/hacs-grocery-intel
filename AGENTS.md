@@ -60,6 +60,8 @@ Guidelines:
 - If vision extraction cannot parse `purchased_at`, it falls back to current Home Assistant local datetime.
 - Prompts enforce structured JSON output.
 - Missing archived files are treated as failures to avoid retry loops.
+- OpenAI quota/billing failures persist `extract_auto_retry=false` and are skipped by automatic receipt scans. Explicit `run_extraction` retries remain available after restoring API access; temporary HTTP 429 throttling must not be labeled as insufficient quota.
+- Re-uploading identical receipt bytes from the original Telegram chat explicitly retries a failed Telegram receipt using its existing record and fresh archive copy. Completed/processing receipts and uploads from other chats keep normal duplicate handling.
 - `reparse_receipts` supports optional `since` / `until` purchased-date filters (inclusive; date-only `until` includes full local day).
 
 ### Analytics, activities, and undo

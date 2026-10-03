@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.6 (2026-10-03)
+
+- Receipts: stop automatic retries after OpenAI quota/billing failures, preventing repeated Telegram error messages. The saved receipt remains failed until explicitly retried.
+- Telegram: re-uploading identical receipt content in its original chat retries the existing failed receipt using a fresh archive copy, without creating another receipt record. Quota errors now explain this retry workflow.
+- Errors: distinguish temporary HTTP 429 rate limits from quota/billing failures.
+- Developer: persist the automatic-retry pause across restarts, log Telegram retry requests, and add four regression tests for quota handling, retry eligibility, and duplicate-upload behavior. Documentation and service descriptions updated.
+
 ## 1.4.5 (2026-07-06)
 
 - MCP/LLM: added scalar, purpose-built read-only tools for common agent workflows: `CalculateGrocerySpendSummary`, `ListRecentGroceryReceipts`, `GetGrocerySpendBreakdown`, `FindProductPriceHistory`, and `InspectGroceryDataQuality`.

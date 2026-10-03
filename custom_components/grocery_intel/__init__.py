@@ -2406,6 +2406,45 @@ async def _async_ingest_receipt_bytes(
             ),
             payload={"filename": safe_filename, "to_path": dest, "source": "telegram"},
         )
+        # A repeat upload is an explicit retry for a failed receipt from this chat.
+        # Reuse its record, and the fresh archive copy in case the old file expired.
+        receipts = await data.storage.async_list_receipts()
+        for receipt in receipts:
+            meta = receipt.get("source_meta") or {}
+            if (
+                receipt.get("content_hash") != content_hash
+                or receipt.get("extract_status") != "failed"
+                or receipt.get("source_type") != "telegram"
+                or not isinstance(meta, dict)
+                or _coerce_int(meta.get("chat_id")) is None
+                or _coerce_int(meta.get("chat_id")) != _coerce_int(source_meta.get("chat_id"))
+            ):
+                continue
+            receipt_id = receipt.get("id")
+            if not receipt_id:
+                continue
+            await data.storage.async_update_receipt(
+                receipt_id,
+                {
+                    "source_meta": source_meta,
+                    "file_path": dest,
+                    "extract_status": "queued",
+                    "extract_auto_retry": True,
+                    "extract_queued_at": dt_util.now().isoformat(),
+                },
+            )
+            await data.activity.async_add_activity(
+                kind="receipt_extraction_retry_requested",
+                description=f"Retry requested by Telegram re-upload: {safe_filename}",
+                payload={"receipt_id": receipt_id, "filename": safe_filename, "source": "telegram"},
+            )
+            hass.async_create_task(
+                _async_run_llm_for_receipt_file(
+                    hass, entry, data, receipt, overwrite=False, force=True
+                )
+            )
+            data.request_refresh()
+            return receipt_id, dest, False
         return None, dest, True
 
     dest = _unique_dest_path(archive_path, safe_filename)
@@ -2891,7 +2930,7 @@ async def _async_scan_receipts_inbox(hass: HomeAssistant) -> None:
     receipts = await data.storage.async_list_receipts()
     queued_any = False
     for receipt in receipts:
-        if receipt.get("file_path") and receipt.get("extract_status") in {"pending", "failed"}:
+        if _receipt_should_auto_extract(receipt):
             rid = receipt.get("id")
             if rid:
                 await data.storage.async_update_receipt(
@@ -3358,6 +3397,7 @@ async def _async_run_llm_for_receipt_file(
             receipt_id,
             {
                 "extract_status": "running",
+                "extract_auto_retry": True,
                 "extract_started_at": now_iso,
                 "extract_method": "llm",
                 "extract_provider": str(entry.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER) or "").lower()
@@ -3948,7 +3988,12 @@ async def _async_run_llm_for_receipt_file(
                 return
         except Exception as err:
             _LOGGER.warning("LLM file parse failed for %s: %s", filename, err)
-            await _async_mark_extract_failed(data, receipt, _friendly_llm_failure_reason(err))
+            await _async_mark_extract_failed(
+                data,
+                receipt,
+                _friendly_llm_failure_reason(err),
+                auto_retry=not _is_openai_quota_error(err),
+            )
 
 
 def _read_receipt_image_base64_and_mime_sync(path: str) -> tuple[str, str]:
@@ -4292,7 +4337,11 @@ async def _async_llm_ollama_image_extract(
     return {}
 
 async def _async_mark_extract_failed(
-    data: GroceryIntelData, receipt: dict[str, Any], reason: str
+    data: GroceryIntelData,
+    receipt: dict[str, Any],
+    reason: str,
+    *,
+    auto_retry: bool = True,
 ) -> None:
     receipt_id = receipt.get("id")
     if not receipt_id:
@@ -4305,6 +4354,7 @@ async def _async_mark_extract_failed(
     duration_ms = _ms_between_iso(started_iso, finished_iso)
     updates = {
         "extract_status": "failed",
+        "extract_auto_retry": auto_retry,
         "extract_attempts": attempts,
         "extract_started_at": None,
         "extract_queued_at": None,
@@ -4330,14 +4380,45 @@ async def _async_mark_extract_failed(
     )
 
 
+def _receipt_should_auto_extract(receipt: dict[str, Any]) -> bool:
+    """Keep quota failures out of periodic scans until an explicit retry."""
+    return bool(
+        receipt.get("file_path")
+        and receipt.get("extract_status") in {"pending", "failed"}
+        and (
+            receipt.get("extract_status") == "pending"
+            or receipt.get("extract_auto_retry", True)
+        )
+    )
+
+
+def _is_openai_quota_error(err: Exception) -> bool:
+    """Distinguish billing/quota failures from temporary HTTP 429 throttling."""
+    low = str(err).lower()
+    return any(
+        code in low
+        for code in (
+            "insufficient_quota",
+            "credit_balance_exhausted",
+            "organization_spend_limit_exceeded",
+            "project_spend_limit_exceeded",
+            "organization_usage_limit_exceeded",
+        )
+    )
+
+
 def _friendly_llm_failure_reason(err: Exception) -> str:
     """Map raw provider errors to actionable, user-facing failure reasons."""
     raw = str(err or "").strip()
     low = raw.lower()
 
-    if "insufficient_quota" in low or ("openai http 429" in low):
-        return "OpenAI quota exceeded (HTTP 429 insufficient_quota). Check billing/quota and retry."
-    if "rate_limit" in low or "too many requests" in low:
+    if _is_openai_quota_error(err):
+        return (
+            "OpenAI quota/billing limit reached. Your receipt is saved; automatic retries are paused. "
+            "After restoring API access, send the same receipt again in Telegram "
+            "or run grocery_intel.run_extraction."
+        )
+    if "rate_limit" in low or "too many requests" in low or "http 429" in low:
         return "LLM rate limit reached. Retry in a few minutes."
     if "timeout" in low:
         return "LLM request timed out. Retry and/or reduce prompt size."

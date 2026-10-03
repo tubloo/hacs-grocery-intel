@@ -253,6 +253,7 @@ If `grocery_intel` successfully processed a receipt (e.g., Telegram feedback say
   6. `Automation`: shopping auto-add and Telegram options.
   7. `Review`: currency/analytics/export settings and confirmation toggle.
 - Receipt extraction is LLM-only.
+  - OpenAI quota/billing failures remain failed and stop automatic retries and repeated Telegram failure messages. After restoring API access, resend the same receipt in the original Telegram chat or call `grocery_intel.run_extraction` (optionally with `receipt_id`) to retry the saved receipt. Receipts already failing before this fix may make one more automatic attempt to record the pause.
   - Images (`.jpg/.png/.webp/.heic/.heif`) are sent to a vision-capable LLM when `llm_provider=ollama` or `llm_provider=openai`.
   - PDFs are parsed from their text layer (via `pypdf`). If the PDF has no text layer, you'll need to OCR/convert it outside Home Assistant (the integration avoids heavy native dependencies).
   - The integration asks the LLM for `total`, `store_name`, `purchased_at`, `receipt_category`, `receipt_subcategories`, and `line_items` (best-effort). For images/PDF-vision it will do a second “line items only” pass to improve extraction.
@@ -315,6 +316,7 @@ You can ingest receipts and inventory images from Telegram by calling `grocery_i
   - `Telegram allowed chat IDs`: recommended for security (comma-separated allowlist)
   - `Telegram auto-detect receipt vs inventory`: when enabled, PDFs default to receipts; images use caption keywords first (e.g., `receipt`, `inventory`, `fridge`, `pantry`) and may use your configured LLM (OpenAI/Ollama vision) to classify when available
   - `Telegram send analysis feedback`: replies in Telegram when queued and when analysis completes/fails (timestamps are formatted in Home Assistant local time)
+    - Re-uploading identical receipt content from the original chat retries a failed Telegram receipt using its existing record. Completed or processing receipts keep normal duplicate handling. Quota failures report the error and pause again if API access has not been restored.
     - Receipt completion feedback includes the detected receipt category (`Grocery` or `Dining`).
     - Receipt completion feedback now also includes unknown-subcategory review details:
       - `Unknown subcategory items: none` when fully mapped.

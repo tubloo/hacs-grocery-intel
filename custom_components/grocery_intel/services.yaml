@@ -168,7 +168,7 @@ scan_receipts_inbox:
 
 run_extraction:
   name: Run Extraction
-  description: Run receipt extraction for pending receipts or a specific receipt using the LLM pipeline. If extraction cannot parse a receipt date, purchased_at falls back to current Home Assistant local datetime.
+  description: Run receipt extraction for pending/failed receipts or a specific receipt using the LLM pipeline, including receipts paused after OpenAI quota/billing errors. Restore API access before retrying. If extraction cannot parse a receipt date, purchased_at falls back to current Home Assistant local datetime.
   fields:
     receipt_id:
       name: Receipt ID
@@ -280,7 +280,7 @@ force_refresh:
 
 telegram_ingest:
   name: Telegram ingest
-  description: Ingest a Telegram attachment into Grocery Intel (receipt or inventory image), optionally auto-detecting category and sending feedback.
+  description: Ingest a Telegram attachment into Grocery Intel (receipt or inventory image), optionally auto-detecting category and sending feedback. Re-uploading identical receipt content in its original Telegram chat retries a failed receipt without creating another receipt record.
   fields:
     chat_id:
       name: Chat ID
